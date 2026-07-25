@@ -1,0 +1,55 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify bundled binaries
+        shell: pwsh
+        run: |
+          $required = @(
+            "thirdparty/bin/win32/yt-dlp.exe",
+            "thirdparty/bin/win32/ffmpeg.exe"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing required binary: $path"
+            }
+          }
+
+      - name: Build Windows app
+        run: pnpm run build
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-section-downloader-windows
+          path: dist/**
+          if-no-files-found: error

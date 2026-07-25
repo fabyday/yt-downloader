@@ -10,6 +10,8 @@ Electron 기반 YouTube 구간 다운로드 앱입니다.
 - 커스텀 타임라인으로 이동/구간 표시
 - 현재 재생 위치 앵커와 긴 영상 이동 중 표시
 - 시작/끝 지점 마킹
+- URL을 불러오면 기본 다운로드 범위를 처음부터 끝까지 자동 지정
+- `t`, `start`, `end`가 들어간 YouTube 링크의 시간대를 초기 구간으로 반영
 - 한 영상에서 여러 구간을 목록으로 추가해 순차 저장
 - 구간 반복 미리보기
 - 다운로드 화질과 yt-dlp 다운로드 속도 제한 선택
@@ -35,6 +37,14 @@ YT_DLP_PATH=/path/to/yt-dlp FFMPEG_PATH=/path/to/ffmpeg pnpm dev
 ```sh
 pnpm dev
 ```
+
+## 빌드
+
+```sh
+pnpm build
+```
+
+GitHub Actions의 `Build` 워크플로가 Windows 패키지를 만들고 `dist` 산출물을 artifact로 업로드합니다.
 
 ## 단축키
 

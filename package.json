@@ -7,7 +7,9 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "electron .",
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:dir": "electron-builder --win --x64 --dir"
   },
   "keywords": [
     "electron",
@@ -17,7 +19,31 @@
   ],
   "author": "",
   "license": "MIT",
+  "build": {
+    "appId": "com.ytdownloader.app",
+    "productName": "YT Section Downloader",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "thirdparty/bin",
+        "to": "thirdparty/bin"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  },
   "devDependencies": {
-    "electron": "^39.2.7"
+    "electron": "^39.2.7",
+    "electron-builder": "^26.15.3"
   }
 }
