@@ -9,6 +9,81 @@ const path = require("path");
 const activeJobs = new Map();
 let rendererServer = null;
 
+const PLATFORM_BINARY_NAMES = {
+  "yt-dlp": process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp",
+  ffmpeg: process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"
+};
+
+const DOWNLOAD_QUALITIES = new Set([
+  "best",
+  "2160",
+  "1440",
+  "1080",
+  "720",
+  "480",
+  "360"
+]);
+const SPEED_LIMITS = new Set(["", "1M", "2M", "5M", "10M", "20M", "50M"]);
+const ENCODING_PRESETS = {
+  "youtube-copy": {
+    id: "youtube-copy",
+    label: "YouTube 원본 유지",
+    extension: "mkv",
+    copy: true
+  },
+  "h264-mp4": {
+    id: "h264-mp4",
+    label: "H.264 MP4",
+    extension: "mp4",
+    args: [
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "18",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      "-movflags",
+      "+faststart"
+    ]
+  },
+  "premiere-prores": {
+    id: "premiere-prores",
+    label: "Premiere ProRes 422 HQ",
+    extension: "mov",
+    args: [
+      "-c:v",
+      "prores_ks",
+      "-profile:v",
+      "3",
+      "-pix_fmt",
+      "yuv422p10le",
+      "-c:a",
+      "pcm_s16le"
+    ]
+  },
+  "davinci-dnxhr": {
+    id: "davinci-dnxhr",
+    label: "DaVinci DNxHR HQX",
+    extension: "mov",
+    args: [
+      "-c:v",
+      "dnxhd",
+      "-profile:v",
+      "dnxhr_hqx",
+      "-pix_fmt",
+      "yuv422p10le",
+      "-c:a",
+      "pcm_s16le"
+    ]
+  }
+};
+
 function createWindow(rendererUrl) {
   const mainWindow = new BrowserWindow({
     width: 1280,
@@ -110,6 +185,8 @@ ipcMain.handle("download:section", async (event, payload) => {
     });
   };
 
+  let tempDir = null;
+
   try {
     const request = normalizeDownloadRequest(payload);
     const ytDlpPath = getConfiguredBinary("yt-dlp", "YT_DLP_PATH");
@@ -121,12 +198,15 @@ ipcMain.handle("download:section", async (event, payload) => {
     await assertCommandAvailable(ffmpegPath, "ffmpeg");
     await fs.mkdir(request.outputDir, { recursive: true });
 
-    const tempDir = path.join(app.getPath("temp"), "yt-section-downloader", jobId);
+    tempDir = path.join(app.getPath("temp"), "yt-section-downloader", jobId);
     await fs.mkdir(tempDir, { recursive: true });
 
     const tempTemplate = path.join(tempDir, "source.%(ext)s");
-    const outputPath = getUniqueOutputPath(
-      path.join(request.outputDir, `${request.basename}.mp4`)
+    const outputPaths = getSegmentOutputPaths(
+      request.outputDir,
+      request.basename,
+      request.segments.length,
+      request.encodingPreset.extension
     );
 
     send("downloading", "원본 영상을 임시 파일로 다운로드하는 중입니다.", {
@@ -135,19 +215,7 @@ ipcMain.handle("download:section", async (event, payload) => {
 
     await runProcess(
       ytDlpPath,
-      [
-        "--no-playlist",
-        "--newline",
-        "-f",
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "--merge-output-format",
-        "mp4",
-        "--remux-video",
-        "mp4",
-        "-o",
-        tempTemplate,
-        request.url
-      ],
+      buildYtDlpArgs({ request, ffmpegPath, tempTemplate }),
       {
         job,
         onLine: (line) => {
@@ -164,41 +232,65 @@ ipcMain.handle("download:section", async (event, payload) => {
     }
 
     const inputPath = await findDownloadedFile(tempDir);
-    const duration = request.end - request.start;
-    const ffmpegArgs = buildFfmpegArgs({
-      mode: request.mode,
-      inputPath,
-      outputPath,
-      start: request.start,
-      duration
-    });
+    const segmentCount = request.segments.length;
+    const cutProgressStart = 0.6;
+    const cutProgressSpan = 0.38;
 
-    send(
-      "cutting",
-      request.mode === "copy"
-        ? "빠른 copy 방식으로 구간을 자르는 중입니다."
-        : "정확 컷 방식으로 구간을 재인코딩하는 중입니다.",
-      { progress: 0.65 }
-    );
-
-    await runProcess(ffmpegPath, ffmpegArgs, {
-      job,
-      onLine: (line) => {
-        const cutProgress = parseFfmpegTimeProgress(line, duration);
-        send("cutting", line, {
-          progress: cutProgress === null ? undefined : 0.65 + cutProgress * 0.33
-        });
+    for (const [index, segment] of request.segments.entries()) {
+      if (job.canceled) {
+        throw new Error("작업이 취소되었습니다.");
       }
-    });
 
-    await fs.rm(tempDir, { recursive: true, force: true });
+      const duration = segment.end - segment.start;
+      const segmentProgressStart =
+        cutProgressStart + (index / segmentCount) * cutProgressSpan;
+      const segmentProgressSpan = cutProgressSpan / segmentCount;
+      const outputPath = outputPaths[index];
+      const ffmpegArgs = buildFfmpegArgs({
+        encodingPreset: request.encodingPreset,
+        inputPath,
+        outputPath,
+        start: segment.start,
+        duration
+      });
 
-    send("done", "구간 파일 저장이 끝났습니다.", {
+      send(
+        "cutting",
+        request.encodingPreset.copy
+          ? `${index + 1}/${segmentCount} 구간을 원본 스트림 유지 방식으로 자르는 중입니다.`
+          : `${index + 1}/${segmentCount} 구간을 ${request.encodingPreset.label} 프리셋으로 인코딩하는 중입니다.`,
+        {
+          progress: segmentProgressStart,
+          segmentIndex: index + 1,
+          segmentCount,
+          outputPath
+        }
+      );
+
+      await runProcess(ffmpegPath, ffmpegArgs, {
+        job,
+        onLine: (line) => {
+          const cutProgress = parseFfmpegTimeProgress(line, duration);
+          send("cutting", line, {
+            progress:
+              cutProgress === null
+                ? undefined
+                : segmentProgressStart + cutProgress * segmentProgressSpan,
+            segmentIndex: index + 1,
+            segmentCount,
+            outputPath
+          });
+        }
+      });
+    }
+
+    send("done", `${segmentCount}개 구간 파일 저장이 끝났습니다.`, {
       progress: 1,
-      outputPath
+      outputPath: outputPaths[0],
+      outputPaths
     });
 
-    return { ok: true, jobId, outputPath };
+    return { ok: true, jobId, outputPath: outputPaths[0], outputPaths };
   } catch (error) {
     send("error", error.message || String(error), { progress: 0 });
     return {
@@ -207,6 +299,9 @@ ipcMain.handle("download:section", async (event, payload) => {
       error: error.message || String(error)
     };
   } finally {
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
     activeJobs.delete(jobId);
   }
 });
@@ -215,6 +310,11 @@ function getConfiguredBinary(defaultName, envName) {
   const configured = process.env[envName];
   if (configured) {
     return configured;
+  }
+
+  const bundledBinary = getBundledBinary(defaultName);
+  if (bundledBinary) {
+    return bundledBinary;
   }
 
   for (const directory of [
@@ -230,6 +330,32 @@ function getConfiguredBinary(defaultName, envName) {
   }
 
   return defaultName;
+}
+
+function getBundledBinary(defaultName) {
+  const executableName = PLATFORM_BINARY_NAMES[defaultName] || defaultName;
+  const platformDir = path.join("thirdparty", "bin", process.platform, executableName);
+  const candidates = [
+    path.join(app.getAppPath(), platformDir),
+    path.join(__dirname, "..", "..", platformDir),
+    path.join(process.resourcesPath || "", platformDir),
+    path.join(process.resourcesPath || "", "app.asar.unpacked", platformDir)
+  ];
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+
+    seen.add(candidate);
+
+    if (canExecute(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 function canExecute(filePath) {
@@ -307,37 +433,77 @@ function getContentType(filePath) {
 }
 
 function normalizeDownloadRequest(payload) {
-  const start = Number(payload?.start);
-  const end = Number(payload?.end);
   const url = String(payload?.url || "").trim();
-  const mode = payload?.mode === "copy" ? "copy" : "exact";
   const outputDir =
     String(payload?.outputDir || "").trim() ||
     path.join(os.homedir(), "Downloads", "YouTube Clips");
   const basename = sanitizeFileName(
     String(payload?.basename || "").trim() || `clip-${new Date().toISOString()}`
   );
+  const segments = normalizeDownloadSegments(payload);
+  const downloadQuality = normalizeDownloadQuality(payload?.downloadQuality);
+  const speedLimit = normalizeSpeedLimit(payload?.speedLimit);
+  const encodingPreset = normalizeEncodingPreset(payload);
 
   if (!isSupportedYouTubeUrl(url)) {
     throw new Error("유효한 YouTube URL을 입력해 주세요.");
   }
 
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    throw new Error("끝 지점은 시작 지점보다 뒤에 있어야 합니다.");
-  }
-
-  if (end - start > 60 * 60 * 6) {
-    throw new Error("구간이 너무 깁니다. 6시간 이하로 선택해 주세요.");
-  }
-
   return {
     url,
-    start: Math.max(0, start),
-    end,
-    mode,
+    segments,
+    downloadQuality,
+    speedLimit,
+    encodingPreset,
     outputDir,
     basename
   };
+}
+
+function normalizeDownloadQuality(value) {
+  const quality = String(value || "best");
+  return DOWNLOAD_QUALITIES.has(quality) ? quality : "best";
+}
+
+function normalizeSpeedLimit(value) {
+  const speedLimit = String(value || "");
+  return SPEED_LIMITS.has(speedLimit) ? speedLimit : "";
+}
+
+function normalizeEncodingPreset(payload) {
+  if (!payload?.encodingPreset && payload?.mode) {
+    return payload.mode === "copy"
+      ? ENCODING_PRESETS["youtube-copy"]
+      : ENCODING_PRESETS["h264-mp4"];
+  }
+
+  return ENCODING_PRESETS[payload?.encodingPreset] || ENCODING_PRESETS["youtube-copy"];
+}
+
+function normalizeDownloadSegments(payload) {
+  const rawSegments =
+    Array.isArray(payload?.segments) && payload.segments.length > 0
+      ? payload.segments
+      : [{ start: payload?.start, end: payload?.end }];
+
+  if (rawSegments.length > 100) {
+    throw new Error("구간은 한 번에 100개 이하로 선택해 주세요.");
+  }
+
+  return rawSegments.map((rawSegment, index) => {
+    const start = Math.max(0, Number(rawSegment?.start));
+    const end = Number(rawSegment?.end);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw new Error(`${index + 1}번 구간의 끝 지점은 시작 지점보다 뒤에 있어야 합니다.`);
+    }
+
+    if (end - start > 60 * 60 * 6) {
+      throw new Error(`${index + 1}번 구간이 너무 깁니다. 6시간 이하로 선택해 주세요.`);
+    }
+
+    return { start, end };
+  });
 }
 
 function isSupportedYouTubeUrl(rawUrl) {
@@ -376,6 +542,52 @@ function getUniqueOutputPath(targetPath) {
   }
 
   return candidate;
+}
+
+function getSegmentOutputPaths(outputDir, basename, segmentCount, extension) {
+  if (segmentCount === 1) {
+    return [getUniqueOutputPath(path.join(outputDir, `${basename}.${extension}`))];
+  }
+
+  const padWidth = Math.max(2, String(segmentCount).length);
+
+  return Array.from({ length: segmentCount }, (_value, index) => {
+    const suffix = String(index + 1).padStart(padWidth, "0");
+    return getUniqueOutputPath(path.join(outputDir, `${basename}-${suffix}.${extension}`));
+  });
+}
+
+function buildYtDlpArgs({ request, ffmpegPath, tempTemplate }) {
+  const args = [
+    "--no-playlist",
+    "--newline",
+    "--ffmpeg-location",
+    ffmpegPath,
+    "-f",
+    getYtDlpFormatSelector(request.downloadQuality),
+    "--merge-output-format",
+    "mkv",
+    "-o",
+    tempTemplate
+  ];
+
+  if (request.speedLimit) {
+    args.push("--limit-rate", request.speedLimit);
+  }
+
+  args.push(request.url);
+  return args;
+}
+
+function getYtDlpFormatSelector(downloadQuality) {
+  if (downloadQuality === "best") {
+    return "bestvideo+bestaudio/best";
+  }
+
+  return [
+    `bestvideo[height<=${downloadQuality}]+bestaudio`,
+    `best[height<=${downloadQuality}]`
+  ].join("/");
 }
 
 async function getCommandVersion(command, args) {
@@ -434,13 +646,19 @@ function runProcess(command, args, { job, onLine }) {
     job.children.push(child);
 
     let buffered = "";
+    const lineTail = [];
     const emitLines = (chunk) => {
       buffered += chunk.toString();
       const lines = buffered.split(/\r?\n/);
       buffered = lines.pop() || "";
       for (const line of lines) {
         if (line.trim()) {
-          onLine(line.trim());
+          const trimmedLine = line.trim();
+          lineTail.push(trimmedLine);
+          if (lineTail.length > 12) {
+            lineTail.shift();
+          }
+          onLine(trimmedLine);
         }
       }
     };
@@ -450,7 +668,12 @@ function runProcess(command, args, { job, onLine }) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (buffered.trim()) {
-        onLine(buffered.trim());
+        const trimmedLine = buffered.trim();
+        lineTail.push(trimmedLine);
+        if (lineTail.length > 12) {
+          lineTail.shift();
+        }
+        onLine(trimmedLine);
       }
 
       if (job.canceled) {
@@ -458,7 +681,8 @@ function runProcess(command, args, { job, onLine }) {
       } else if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`${command} exited with code ${code}`));
+        const detail = lineTail.length > 0 ? `\n${lineTail.join("\n")}` : "";
+        reject(new Error(`${path.basename(command)} exited with code ${code}${detail}`));
       }
     });
   });
@@ -485,7 +709,7 @@ async function findDownloadedFile(tempDir) {
   return withStats[0].filePath;
 }
 
-function buildFfmpegArgs({ mode, inputPath, outputPath, start, duration }) {
+function buildFfmpegArgs({ encodingPreset, inputPath, outputPath, start, duration }) {
   const common = [
     "-hide_banner",
     "-y",
@@ -497,7 +721,7 @@ function buildFfmpegArgs({ mode, inputPath, outputPath, start, duration }) {
     inputPath
   ];
 
-  if (mode === "copy") {
+  if (encodingPreset.copy) {
     return [
       ...common,
       "-c",
@@ -508,20 +732,7 @@ function buildFfmpegArgs({ mode, inputPath, outputPath, start, duration }) {
     ];
   }
 
-  return [
-    ...common,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "18",
-    "-c:a",
-    "aac",
-    "-movflags",
-    "+faststart",
-    outputPath
-  ];
+  return [...common, ...encodingPreset.args, outputPath];
 }
 
 function formatTimestamp(totalSeconds) {
