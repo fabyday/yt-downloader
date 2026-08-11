@@ -49,6 +49,8 @@ const state = {
   videoTitle: "",
   startTime: null,
   endTime: null,
+  rangeIsDefault: true,
+  pendingLinkRange: null,
   segments: [],
   nextSegmentId: 1,
   loopEnabled: false,
@@ -82,8 +84,10 @@ const elements = {
   endMarkerHandle: document.querySelector("#endMarkerHandle"),
   startTime: document.querySelector("#startTime"),
   endTime: document.querySelector("#endTime"),
+  rangeSummary: document.querySelector("#rangeSummary"),
   setStartButton: document.querySelector("#setStartButton"),
   setEndButton: document.querySelector("#setEndButton"),
+  resetSelectionButton: document.querySelector("#resetSelectionButton"),
   addSegmentButton: document.querySelector("#addSegmentButton"),
   clearSegmentsButton: document.querySelector("#clearSegmentsButton"),
   segmentCount: document.querySelector("#segmentCount"),
@@ -124,6 +128,7 @@ elements.outputDirInput.value = DEFAULT_OUTPUT_DIR;
 renderEncodingPresetOptions();
 renderEncodingPresetDetails();
 renderSegmentList();
+syncRangeDisplay();
 renderDownloadQueue();
 loadDependencies();
 bindEvents();
@@ -140,6 +145,7 @@ function bindEvents() {
 
   elements.setStartButton.addEventListener("click", () => setMarker("start"));
   elements.setEndButton.addEventListener("click", () => setMarker("end"));
+  elements.resetSelectionButton.addEventListener("click", resetSelectionToFullVideo);
   elements.addSegmentButton.addEventListener("click", addSegmentFromSelection);
   elements.clearSegmentsButton.addEventListener("click", clearSegments);
   elements.encodingPresetSelect.addEventListener("change", renderEncodingPresetDetails);
@@ -273,27 +279,29 @@ function loadYouTubeApi() {
 }
 
 window.onYouTubeIframeAPIReady = () => {
-  const pendingVideoId = extractVideoId(elements.urlInput.value);
-  if (pendingVideoId) {
-    createOrLoadPlayer(pendingVideoId);
+  const pendingLink = parseYouTubeLink(elements.urlInput.value);
+  if (pendingLink.videoId) {
+    createOrLoadPlayer(pendingLink.videoId, pendingLink.timeRange);
   }
 };
 
 function loadVideoFromInput() {
-  const videoId = extractVideoId(elements.urlInput.value);
+  const link = parseYouTubeLink(elements.urlInput.value);
+  const videoId = link.videoId;
   if (!videoId) {
     setProgressLabel("유효한 YouTube URL을 입력해 주세요.");
     return;
   }
 
-  createOrLoadPlayer(videoId);
+  createOrLoadPlayer(videoId, link.timeRange);
   if (!elements.basenameInput.value.trim()) {
     elements.basenameInput.value = `clip-${videoId}`;
   }
 }
 
-function createOrLoadPlayer(videoId) {
+function createOrLoadPlayer(videoId, initialRange = null) {
   resetMarkers();
+  state.pendingLinkRange = initialRange;
   elements.playerStage.classList.add("has-video");
 
   if (state.player?.loadVideoById) {
@@ -344,6 +352,8 @@ function createOrLoadPlayer(videoId) {
 function resetMarkers() {
   state.startTime = null;
   state.endTime = null;
+  state.rangeIsDefault = true;
+  state.pendingLinkRange = null;
   state.segments = [];
   state.nextSegmentId = 1;
   state.currentTime = 0;
@@ -361,6 +371,7 @@ function resetMarkers() {
   elements.timelineInput.value = "0";
   elements.timelineInput.max = "0";
   elements.timelineInput.disabled = true;
+  syncRangeDisplay();
   renderTimeline();
   renderSegmentList();
 }
@@ -402,6 +413,8 @@ function setMarker(kind) {
     return;
   }
 
+  state.rangeIsDefault = false;
+  state.pendingLinkRange = null;
   const current = getCurrentTimelineTime();
   if (kind === "start") {
     state.startTime = current;
@@ -415,8 +428,94 @@ function setMarker(kind) {
     elements.endTime.textContent = formatTime(current);
   }
 
+  syncRangeDisplay();
   renderTimeline();
   updateDownloadButtonLabel();
+}
+
+function resetSelectionToFullVideo() {
+  if (!applyFullVideoRange()) {
+    setProgressLabel("먼저 영상을 불러와 주세요.");
+    return;
+  }
+
+  state.pendingLinkRange = null;
+  state.segments = [];
+  state.nextSegmentId = 1;
+  renderSegmentList();
+  renderTimeline();
+  setProgressLabel("다운로드 범위를 전체 영상으로 초기화했습니다.");
+}
+
+function applyFullVideoRange() {
+  if (state.duration <= 0) {
+    return false;
+  }
+
+  state.startTime = 0;
+  state.endTime = state.duration;
+  state.rangeIsDefault = true;
+  syncRangeDisplay();
+  updateDownloadButtonLabel();
+  return true;
+}
+
+function applyLinkTimeRange(range) {
+  state.pendingLinkRange = null;
+
+  if (!range || state.duration <= 0) {
+    return false;
+  }
+
+  const start = clampTime(range.start ?? 0);
+  const end = clampTime(range.end ?? state.duration);
+
+  if (end <= start) {
+    applyFullVideoRange();
+    setProgressLabel("링크 시간대가 유효하지 않아 전체 영상으로 설정했습니다.");
+    return false;
+  }
+
+  state.startTime = start;
+  state.endTime = end;
+  state.rangeIsDefault =
+    start === 0 && Math.abs(state.duration - end) < 0.01;
+  syncRangeDisplay();
+  updateDownloadButtonLabel();
+  renderTimeline();
+
+  if (start > 0 && state.playerReady) {
+    seekToTimelineTime(start, true);
+  }
+
+  setProgressLabel(
+    range.end === null
+      ? "링크 시작 시간을 구간 시작점으로 적용했습니다."
+      : "링크 시간대를 구간으로 적용했습니다."
+  );
+  return true;
+}
+
+function syncRangeDisplay() {
+  elements.startTime.textContent =
+    state.startTime === null ? "--:--.---" : formatTime(state.startTime);
+  elements.endTime.textContent =
+    state.endTime === null ? "--:--.---" : formatTime(state.endTime);
+  elements.resetSelectionButton.disabled = state.duration <= 0;
+
+  if (
+    state.startTime !== null &&
+    state.endTime !== null &&
+    state.endTime > state.startTime
+  ) {
+    const label = state.rangeIsDefault ? "전체 영상" : "선택 구간";
+    elements.rangeSummary.textContent = `${label} · ${formatTime(
+      state.endTime - state.startTime
+    )}`;
+    return;
+  }
+
+  elements.rangeSummary.textContent = "구간 미지정";
 }
 
 function addSegmentFromSelection() {
@@ -459,8 +558,8 @@ function removeSegment(segmentId) {
 function loadSegmentToMarkers(segment) {
   state.startTime = segment.start;
   state.endTime = segment.end;
-  elements.startTime.textContent = formatTime(segment.start);
-  elements.endTime.textContent = formatTime(segment.end);
+  state.rangeIsDefault = false;
+  syncRangeDisplay();
 
   if (state.playerReady) {
     seekToTimelineTime(segment.start, true);
@@ -470,6 +569,10 @@ function loadSegmentToMarkers(segment) {
 }
 
 function getSelectionSegment() {
+  if ((state.startTime === null || state.endTime === null) && state.duration > 0) {
+    applyFullVideoRange();
+  }
+
   if (state.startTime === null || state.endTime === null) {
     setProgressLabel("시작 지점과 끝 지점을 먼저 설정해 주세요.");
     return null;
@@ -547,6 +650,11 @@ function renderSegmentList() {
 
 function updateDownloadButtonLabel() {
   const count = state.segments.length;
+  if (count === 0 && state.rangeIsDefault && state.startTime !== null && state.endTime !== null) {
+    elements.downloadButton.textContent = "전체 영상 큐에 추가";
+    return;
+  }
+
   elements.downloadButton.textContent =
     count > 0 ? `${count}개 구간 큐에 추가` : "선택 구간 큐에 추가";
 }
@@ -648,6 +756,8 @@ function updateMarkerFromPointer(marker, clientX) {
   const rect = elements.timelineInput.getBoundingClientRect();
   const ratio = rect.width <= 0 ? 0 : (clientX - rect.left) / rect.width;
   let next = clampTime(ratio * state.duration);
+  state.rangeIsDefault = false;
+  state.pendingLinkRange = null;
 
   if (marker === "start") {
     if (state.endTime !== null) {
@@ -664,6 +774,7 @@ function updateMarkerFromPointer(marker, clientX) {
   }
 
   seekToTimelineTime(next, true);
+  syncRangeDisplay();
   renderTimeline();
 }
 
@@ -1031,6 +1142,13 @@ function updateDuration() {
   elements.durationTime.textContent = formatTime(duration);
   elements.timelineInput.max = String(duration);
   elements.timelineInput.disabled = false;
+  if (state.pendingLinkRange) {
+    applyLinkTimeRange(state.pendingLinkRange);
+  } else if (state.rangeIsDefault) {
+    applyFullVideoRange();
+  } else {
+    syncRangeDisplay();
+  }
   renderTimeline();
 }
 
@@ -1217,34 +1335,131 @@ function appendLog(line) {
   elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
 }
 
-function extractVideoId(input) {
+function parseYouTubeLink(input) {
   try {
     const url = new URL(input.trim());
-    const host = url.hostname.replace(/^www\./, "");
-
-    if (host === "youtu.be") {
-      return url.pathname.split("/").filter(Boolean)[0] || null;
-    }
-
-    if (
-      host === "youtube.com" ||
-      host === "m.youtube.com" ||
-      host === "music.youtube.com"
-    ) {
-      if (url.pathname === "/watch") {
-        return url.searchParams.get("v");
-      }
-
-      const parts = url.pathname.split("/").filter(Boolean);
-      if (["embed", "shorts", "live"].includes(parts[0])) {
-        return parts[1] || null;
-      }
-    }
+    return {
+      videoId: getYouTubeVideoId(url),
+      timeRange: getYouTubeLinkTimeRange(url)
+    };
   } catch {
-    return null;
+    return { videoId: null, timeRange: null };
+  }
+}
+
+function extractVideoId(input) {
+  return parseYouTubeLink(input).videoId;
+}
+
+function getYouTubeVideoId(url) {
+  const host = url.hostname.replace(/^www\./, "");
+
+  if (host === "youtu.be") {
+    return url.pathname.split("/").filter(Boolean)[0] || null;
+  }
+
+  if (
+    host === "youtube.com" ||
+    host === "m.youtube.com" ||
+    host === "music.youtube.com"
+  ) {
+    if (url.pathname === "/watch") {
+      return url.searchParams.get("v");
+    }
+
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (["embed", "shorts", "live"].includes(parts[0])) {
+      return parts[1] || null;
+    }
   }
 
   return null;
+}
+
+function getYouTubeLinkTimeRange(url) {
+  const paramSets = getUrlParamSets(url);
+  const start =
+    getFirstTimeParam(paramSets, ["start"]) ??
+    getFirstTimeParam(paramSets, ["t"]) ??
+    getFirstTimeParam(paramSets, ["time_continue"]);
+  const end = getFirstTimeParam(paramSets, ["end"]);
+
+  if (start === null && end === null) {
+    return null;
+  }
+
+  return {
+    start: start ?? 0,
+    end
+  };
+}
+
+function getUrlParamSets(url) {
+  const paramSets = [url.searchParams];
+  const hash = url.hash.replace(/^#/, "").replace(/^\?/, "");
+
+  if (hash.includes("=")) {
+    paramSets.push(new URLSearchParams(hash));
+  }
+
+  return paramSets;
+}
+
+function getFirstTimeParam(paramSets, names) {
+  for (const name of names) {
+    for (const params of paramSets) {
+      const value = params.get(name);
+      const seconds = parseLinkTimeValue(value);
+      if (seconds !== null) {
+        return seconds;
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseLinkTimeValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const text = String(value).trim().toLowerCase();
+  if (!text) {
+    return null;
+  }
+
+  if (/^\d+(?:\.\d+)?s?$/.test(text)) {
+    return Number.parseFloat(text);
+  }
+
+  if (/^\d{1,2}(?::\d{1,2}){1,2}(?:\.\d+)?$/.test(text)) {
+    return text
+      .split(":")
+      .map(Number)
+      .reduce((total, part) => total * 60 + part, 0);
+  }
+
+  const unitPattern = /(\d+(?:\.\d+)?)(h|m|s)/g;
+  let total = 0;
+  let matched = false;
+  let match = unitPattern.exec(text);
+
+  while (match) {
+    matched = true;
+    const amount = Number.parseFloat(match[1]);
+    if (match[2] === "h") {
+      total += amount * 3600;
+    } else if (match[2] === "m") {
+      total += amount * 60;
+    } else {
+      total += amount;
+    }
+
+    match = unitPattern.exec(text);
+  }
+
+  return matched ? total : null;
 }
 
 function formatTime(totalSeconds) {
