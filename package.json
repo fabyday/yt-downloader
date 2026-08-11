@@ -2,14 +2,27 @@
   "name": "yt-section-downloader",
   "version": "0.1.0",
   "description": "Electron app for previewing YouTube videos and downloading selected clips.",
-  "main": "src/main/main.cjs",
+  "main": "build/main/main.js",
   "type": "commonjs",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "electron .",
-    "start": "electron .",
-    "build": "electron-builder --win --x64",
-    "build:dir": "electron-builder --win --x64 --dir"
+    "typecheck": "tsc --noEmit",
+    "bundle": "pnpm run bundle:prod",
+    "bundle:prod": "webpack --config src/Main/webpack.prod.ts src/Preload/webpack.prod.ts src/Renderer/webpack.prod.ts src/Worker/webpack.prod.ts",
+    "bundle:dev": "webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts",
+    "bundle:main:prod": "webpack --config src/Main/webpack.prod.ts",
+    "bundle:main:dev": "webpack --config src/Main/webpack.dev.ts",
+    "bundle:preload:prod": "webpack --config src/Preload/webpack.prod.ts",
+    "bundle:preload:dev": "webpack --config src/Preload/webpack.dev.ts",
+    "bundle:renderer:prod": "webpack --config src/Renderer/webpack.prod.ts",
+    "bundle:renderer:dev": "webpack --config src/Renderer/webpack.dev.ts",
+    "bundle:worker:prod": "webpack --config src/Worker/webpack.prod.ts",
+    "bundle:worker:dev": "webpack --config src/Worker/webpack.dev.ts",
+    "dev": "pnpm run bundle:dev && electron .",
+    "start": "pnpm run dev",
+    "watch": "webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts --watch",
+    "build": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64",
+    "build:dir": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64 --dir"
   },
   "keywords": [
     "electron",
@@ -26,7 +39,7 @@
       "output": "dist"
     },
     "files": [
-      "src/**/*",
+      "build/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -43,7 +56,14 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
+    "copy-webpack-plugin": "^13.0.1",
     "electron": "^39.2.7",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "ts-loader": "^9.5.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^6.0.1"
   }
 }

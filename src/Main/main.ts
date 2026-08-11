@@ -1,15 +1,84 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
-const { spawn } = require("child_process");
-const fs = require("fs/promises");
-const fsSync = require("fs");
-const http = require("http");
-const os = require("os");
-const path = require("path");
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
+import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
+import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
+import type {
+  CompletedDownloadSegment,
+  DependencyStatus,
+  DownloadProgress,
+  DownloadRequest,
+  DownloadResult,
+  DownloadSegment
+} from "../Shared/types";
 
-const activeJobs = new Map();
-let rendererServer = null;
+type BinaryName = "yt-dlp" | "ffmpeg";
 
-const PLATFORM_BINARY_NAMES = {
+interface EncodingPreset {
+  id: string;
+  label: string;
+  extension: string;
+  copy?: boolean;
+  args?: string[];
+}
+
+interface NormalizedDownloadSegment extends DownloadSegment {
+  key: string;
+}
+
+interface NormalizedDownloadRequest
+  extends Omit<
+    DownloadRequest,
+    "encodingPreset" | "segments" | "skipSegmentKeys"
+  > {
+  encodingPreset: EncodingPreset;
+  segments: NormalizedDownloadSegment[];
+  resumeKey: string;
+  skipSegmentKeys: Set<string>;
+  keepSourceCache: boolean;
+}
+
+interface DownloadPayload extends Partial<Omit<DownloadRequest, "segments">> {
+  segments?: Array<Partial<DownloadSegment>>;
+  start?: unknown;
+  end?: unknown;
+  mode?: string;
+}
+
+interface DownloadJob {
+  id: string;
+  children: ChildProcessWithoutNullStreams[];
+  canceled: boolean;
+}
+
+interface RendererServer {
+  server: http.Server;
+  url: string;
+}
+
+interface ProcessExecutionError extends Error {
+  code?: string | number | null;
+}
+
+interface RunProcessOptions {
+  job: DownloadJob;
+  onLine: (line: string) => void;
+}
+
+type ProgressExtra = Omit<
+  Partial<DownloadProgress>,
+  "jobId" | "stage" | "message"
+>;
+
+const activeJobs = new Map<string, DownloadJob>();
+let rendererServer: RendererServer | null = null;
+let queueStateRevision = 0;
+
+const PLATFORM_BINARY_NAMES: Record<BinaryName, string> = {
   "yt-dlp": process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp",
   ffmpeg: process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"
 };
@@ -24,7 +93,7 @@ const DOWNLOAD_QUALITIES = new Set([
   "360"
 ]);
 const SPEED_LIMITS = new Set(["", "1M", "2M", "5M", "10M", "20M", "50M"]);
-const ENCODING_PRESETS = {
+const ENCODING_PRESETS: Record<string, EncodingPreset> = {
   "youtube-copy": {
     id: "youtube-copy",
     label: "YouTube 원본 유지",
@@ -84,7 +153,7 @@ const ENCODING_PRESETS = {
   }
 };
 
-function createWindow(rendererUrl) {
+function createWindow(rendererUrl: string): void {
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -93,7 +162,7 @@ function createWindow(rendererUrl) {
     title: "YT Section Downloader",
     backgroundColor: "#111317",
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.cjs"),
+      preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
@@ -108,7 +177,7 @@ app.whenReady().then(async () => {
   createWindow(rendererServer.url);
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (BrowserWindow.getAllWindows().length === 0 && rendererServer) {
       createWindow(rendererServer.url);
     }
   });
@@ -121,6 +190,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  for (const job of activeJobs.values()) {
+    job.canceled = true;
+    for (const child of job.children) {
+      if (!child.killed) {
+        child.kill("SIGTERM");
+      }
+    }
+  }
   rendererServer?.server.close();
 });
 
@@ -146,16 +223,21 @@ ipcMain.handle("dialog:select-output-dir", async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle("download:open-output", async (_event, filePath) => {
+ipcMain.handle(
+  "download:open-output",
+  async (_event: IpcMainInvokeEvent, filePath: string) => {
   if (!filePath) {
     return false;
   }
 
   shell.showItemInFolder(filePath);
   return true;
-});
+  }
+);
 
-ipcMain.handle("download:cancel", async (_event, jobId) => {
+ipcMain.handle(
+  "download:cancel",
+  async (_event: IpcMainInvokeEvent, jobId: string) => {
   const job = activeJobs.get(jobId);
   if (!job) {
     return { canceled: false };
@@ -169,14 +251,71 @@ ipcMain.handle("download:cancel", async (_event, jobId) => {
   }
 
   return { canceled: true };
+  }
+);
+
+ipcMain.handle(
+  "download:release-cache",
+  async (_event: IpcMainInvokeEvent, resumeKey: string) => {
+    const safeKey = sanitizeResumeKey(resumeKey);
+    if (!safeKey) {
+      return false;
+    }
+
+    await fs.rm(getDownloadCacheDir(safeKey), { recursive: true, force: true });
+    return true;
+  }
+);
+
+ipcMain.handle("queue:load-state", async () => {
+  try {
+    return await fs.readFile(getQueueStatePath(), "utf8");
+  } catch (error) {
+    const processError = error as NodeJS.ErrnoException;
+    if (processError.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 });
 
-ipcMain.handle("download:section", async (event, payload) => {
+ipcMain.handle(
+  "queue:save-state",
+  async (_event: IpcMainInvokeEvent, serialized: string) => {
+    const stateJson = normalizeQueueStateJson(serialized);
+    const revision = ++queueStateRevision;
+    await writeQueueState(stateJson, revision);
+    return true;
+  }
+);
+
+ipcMain.on("queue:save-state-sync", (event, serialized: string) => {
+  try {
+    const stateJson = normalizeQueueStateJson(serialized);
+    queueStateRevision += 1;
+    const statePath = getQueueStatePath();
+    fsSync.mkdirSync(path.dirname(statePath), { recursive: true });
+    fsSync.writeFileSync(statePath, stateJson, "utf8");
+    event.returnValue = true;
+  } catch {
+    event.returnValue = false;
+  }
+});
+
+ipcMain.handle(
+  "download:section",
+  async (
+    event: IpcMainInvokeEvent,
+    payload: DownloadPayload
+  ): Promise<DownloadResult> => {
   const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const job = { id: jobId, children: [], canceled: false };
+  const job: DownloadJob = { id: jobId, children: [], canceled: false };
   activeJobs.set(jobId, job);
 
-  const send = (stage, message, extra = {}) => {
+  const send = (stage: string, message: string, extra: ProgressExtra = {}) => {
+    if (event.sender.isDestroyed()) {
+      return;
+    }
     event.sender.send("download:progress", {
       jobId,
       stage,
@@ -185,7 +324,8 @@ ipcMain.handle("download:section", async (event, payload) => {
     });
   };
 
-  let tempDir = null;
+  let tempDir: string | null = null;
+  let removeTempOnFinish = false;
 
   try {
     const request = normalizeDownloadRequest(payload);
@@ -198,8 +338,14 @@ ipcMain.handle("download:section", async (event, payload) => {
     await assertCommandAvailable(ffmpegPath, "ffmpeg");
     await fs.mkdir(request.outputDir, { recursive: true });
 
-    tempDir = path.join(app.getPath("temp"), "yt-section-downloader", jobId);
+    tempDir = getDownloadCacheDir(request.resumeKey);
     await fs.mkdir(tempDir, { recursive: true });
+    const cachedCompletedSegments = await readCompletedSegments(tempDir);
+    for (const completed of cachedCompletedSegments) {
+      if (fsSync.existsSync(completed.outputPath)) {
+        request.skipSegmentKeys.add(completed.key);
+      }
+    }
 
     const tempTemplate = path.join(tempDir, "source.%(ext)s");
     const outputPaths = getSegmentOutputPaths(
@@ -208,6 +354,30 @@ ipcMain.handle("download:section", async (event, payload) => {
       request.segments.length,
       request.encodingPreset.extension
     );
+    const pendingSegments = request.segments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment }) => !request.skipSegmentKeys.has(segment.key));
+
+    if (pendingSegments.length === 0) {
+      removeTempOnFinish = !request.keepSourceCache;
+      const requestedKeys = new Set(request.segments.map((segment) => segment.key));
+      const completedSegments = cachedCompletedSegments.filter(
+        (segment) =>
+          requestedKeys.has(segment.key) && fsSync.existsSync(segment.outputPath)
+      );
+      send("done", "이미 완료된 구간이라 다시 다운로드하지 않았습니다.", {
+        progress: 1,
+        outputPath: completedSegments[0]?.outputPath,
+        outputPaths: completedSegments.map((segment) => segment.outputPath)
+      });
+      return {
+        ok: true,
+        jobId,
+        outputPath: completedSegments[0]?.outputPath,
+        outputPaths: completedSegments.map((segment) => segment.outputPath),
+        completedSegments
+      };
+    }
 
     send("downloading", "원본 영상을 임시 파일로 다운로드하는 중입니다.", {
       progress: 0.05
@@ -232,24 +402,27 @@ ipcMain.handle("download:section", async (event, payload) => {
     }
 
     const inputPath = await findDownloadedFile(tempDir);
-    const segmentCount = request.segments.length;
+    const segmentCount = pendingSegments.length;
     const cutProgressStart = 0.6;
     const cutProgressSpan = 0.38;
+    const completedSegments: CompletedDownloadSegment[] = [];
 
-    for (const [index, segment] of request.segments.entries()) {
+    for (const [pendingIndex, entry] of pendingSegments.entries()) {
+      const { segment, index } = entry;
       if (job.canceled) {
         throw new Error("작업이 취소되었습니다.");
       }
 
       const duration = segment.end - segment.start;
       const segmentProgressStart =
-        cutProgressStart + (index / segmentCount) * cutProgressSpan;
+        cutProgressStart + (pendingIndex / segmentCount) * cutProgressSpan;
       const segmentProgressSpan = cutProgressSpan / segmentCount;
       const outputPath = outputPaths[index];
+      const partialOutputPath = getPartialOutputPath(outputPath);
       const ffmpegArgs = buildFfmpegArgs({
         encodingPreset: request.encodingPreset,
         inputPath,
-        outputPath,
+        outputPath: partialOutputPath,
         start: segment.start,
         duration
       });
@@ -257,12 +430,13 @@ ipcMain.handle("download:section", async (event, payload) => {
       send(
         "cutting",
         request.encodingPreset.copy
-          ? `${index + 1}/${segmentCount} 구간을 원본 스트림 유지 방식으로 자르는 중입니다.`
-          : `${index + 1}/${segmentCount} 구간을 ${request.encodingPreset.label} 프리셋으로 인코딩하는 중입니다.`,
+          ? `${pendingIndex + 1}/${segmentCount} 구간을 원본 스트림 유지 방식으로 자르는 중입니다.`
+          : `${pendingIndex + 1}/${segmentCount} 구간을 ${request.encodingPreset.label} 프리셋으로 인코딩하는 중입니다.`,
         {
           progress: segmentProgressStart,
-          segmentIndex: index + 1,
+          segmentIndex: pendingIndex + 1,
           segmentCount,
+          segmentKey: segment.key,
           outputPath
         }
       );
@@ -276,37 +450,67 @@ ipcMain.handle("download:section", async (event, payload) => {
               cutProgress === null
                 ? undefined
                 : segmentProgressStart + cutProgress * segmentProgressSpan,
-            segmentIndex: index + 1,
+            segmentIndex: pendingIndex + 1,
             segmentCount,
+            segmentKey: segment.key,
             outputPath
           });
         }
       });
+
+      await fs.rename(partialOutputPath, outputPath);
+      completedSegments.push({ key: segment.key, outputPath });
+      await writeCompletedSegments(tempDir, [
+        ...cachedCompletedSegments,
+        ...completedSegments
+      ]);
+      send(
+        "segment-done",
+        `${pendingIndex + 1}/${segmentCount} 구간 저장이 끝났습니다.`,
+        {
+          progress:
+            cutProgressStart +
+            ((pendingIndex + 1) / segmentCount) * cutProgressSpan,
+          segmentIndex: pendingIndex + 1,
+          segmentCount,
+          segmentKey: segment.key,
+          outputPath
+        }
+      );
     }
 
     send("done", `${segmentCount}개 구간 파일 저장이 끝났습니다.`, {
       progress: 1,
-      outputPath: outputPaths[0],
-      outputPaths
+      outputPath: completedSegments[0]?.outputPath,
+      outputPaths: completedSegments.map((segment) => segment.outputPath)
     });
 
-    return { ok: true, jobId, outputPath: outputPaths[0], outputPaths };
+    removeTempOnFinish = !request.keepSourceCache;
+    return {
+      ok: true,
+      jobId,
+      outputPath: completedSegments[0]?.outputPath,
+      outputPaths: completedSegments.map((segment) => segment.outputPath),
+      completedSegments
+    };
   } catch (error) {
-    send("error", error.message || String(error), { progress: 0 });
+    const message = getErrorMessage(error);
+    send("error", message, { progress: 0 });
     return {
       ok: false,
       jobId,
-      error: error.message || String(error)
+      error: message
     };
   } finally {
-    if (tempDir) {
+    if (tempDir && removeTempOnFinish) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
     activeJobs.delete(jobId);
   }
-});
+  }
+);
 
-function getConfiguredBinary(defaultName, envName) {
+function getConfiguredBinary(defaultName: BinaryName, envName: string): string {
   const configured = process.env[envName];
   if (configured) {
     return configured;
@@ -332,16 +536,19 @@ function getConfiguredBinary(defaultName, envName) {
   return defaultName;
 }
 
-function getBundledBinary(defaultName) {
+function getBundledBinary(defaultName: BinaryName): string | null {
   const executableName = PLATFORM_BINARY_NAMES[defaultName] || defaultName;
   const platformDir = path.join("thirdparty", "bin", process.platform, executableName);
+  const resourcesPath = (
+    process as NodeJS.Process & { resourcesPath?: string }
+  ).resourcesPath;
   const candidates = [
     path.join(app.getAppPath(), platformDir),
     path.join(__dirname, "..", "..", platformDir),
-    path.join(process.resourcesPath || "", platformDir),
-    path.join(process.resourcesPath || "", "app.asar.unpacked", platformDir)
+    path.join(resourcesPath || "", platformDir),
+    path.join(resourcesPath || "", "app.asar.unpacked", platformDir)
   ];
-  const seen = new Set();
+  const seen = new Set<string>();
 
   for (const candidate of candidates) {
     if (!candidate || seen.has(candidate)) {
@@ -358,7 +565,7 @@ function getBundledBinary(defaultName) {
   return null;
 }
 
-function canExecute(filePath) {
+function canExecute(filePath: string): boolean {
   try {
     fsSync.accessSync(filePath, fsSync.constants.X_OK);
     return true;
@@ -367,10 +574,10 @@ function canExecute(filePath) {
   }
 }
 
-function startRendererServer() {
+function startRendererServer(): Promise<RendererServer> {
   const rendererRoot = path.join(__dirname, "../renderer");
 
-  return new Promise((resolve, reject) => {
+  return new Promise<RendererServer>((resolve, reject) => {
     const server = http.createServer((request, response) => {
       serveRendererFile(rendererRoot, request, response);
     });
@@ -378,6 +585,10 @@ function startRendererServer() {
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("렌더러 서버 주소를 확인할 수 없습니다."));
+        return;
+      }
       resolve({
         server,
         url: `http://127.0.0.1:${address.port}/index.html`
@@ -386,8 +597,12 @@ function startRendererServer() {
   });
 }
 
-function serveRendererFile(rendererRoot, request, response) {
-  const requestUrl = new URL(request.url, "http://127.0.0.1");
+function serveRendererFile(
+  rendererRoot: string,
+  request: http.IncomingMessage,
+  response: http.ServerResponse
+): void {
+  const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
   const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
   const resolvedPath = path.resolve(rendererRoot, `.${decodeURIComponent(pathname)}`);
 
@@ -412,7 +627,7 @@ function serveRendererFile(rendererRoot, request, response) {
   });
 }
 
-function getContentType(filePath) {
+function getContentType(filePath: string): string {
   switch (path.extname(filePath)) {
     case ".html":
       return "text/html; charset=utf-8";
@@ -432,7 +647,9 @@ function getContentType(filePath) {
   }
 }
 
-function normalizeDownloadRequest(payload) {
+function normalizeDownloadRequest(
+  payload: DownloadPayload | null | undefined
+): NormalizedDownloadRequest {
   const url = String(payload?.url || "").trim();
   const outputDir =
     String(payload?.outputDir || "").trim() ||
@@ -444,6 +661,14 @@ function normalizeDownloadRequest(payload) {
   const downloadQuality = normalizeDownloadQuality(payload?.downloadQuality);
   const speedLimit = normalizeSpeedLimit(payload?.speedLimit);
   const encodingPreset = normalizeEncodingPreset(payload);
+  const resumeKey =
+    sanitizeResumeKey(String(payload?.resumeKey || "")) ||
+    `download-${Date.now()}`;
+  const skipSegmentKeys = new Set(
+    Array.isArray(payload?.skipSegmentKeys)
+      ? payload.skipSegmentKeys.map(String).filter(Boolean)
+      : []
+  );
 
   if (!isSupportedYouTubeUrl(url)) {
     throw new Error("유효한 YouTube URL을 입력해 주세요.");
@@ -456,35 +681,46 @@ function normalizeDownloadRequest(payload) {
     speedLimit,
     encodingPreset,
     outputDir,
-    basename
+    basename,
+    resumeKey,
+    skipSegmentKeys,
+    keepSourceCache: payload?.keepSourceCache === true
   };
 }
 
-function normalizeDownloadQuality(value) {
+function normalizeDownloadQuality(value: unknown): string {
   const quality = String(value || "best");
   return DOWNLOAD_QUALITIES.has(quality) ? quality : "best";
 }
 
-function normalizeSpeedLimit(value) {
+function normalizeSpeedLimit(value: unknown): string {
   const speedLimit = String(value || "");
   return SPEED_LIMITS.has(speedLimit) ? speedLimit : "";
 }
 
-function normalizeEncodingPreset(payload) {
+function normalizeEncodingPreset(
+  payload: DownloadPayload | null | undefined
+): EncodingPreset {
   if (!payload?.encodingPreset && payload?.mode) {
     return payload.mode === "copy"
       ? ENCODING_PRESETS["youtube-copy"]
       : ENCODING_PRESETS["h264-mp4"];
   }
 
-  return ENCODING_PRESETS[payload?.encodingPreset] || ENCODING_PRESETS["youtube-copy"];
+  const presetId = payload?.encodingPreset;
+  return (
+    (presetId ? ENCODING_PRESETS[presetId] : undefined) ||
+    ENCODING_PRESETS["youtube-copy"]
+  );
 }
 
-function normalizeDownloadSegments(payload) {
+function normalizeDownloadSegments(
+  payload: DownloadPayload | null | undefined
+): NormalizedDownloadSegment[] {
   const rawSegments =
     Array.isArray(payload?.segments) && payload.segments.length > 0
       ? payload.segments
-      : [{ start: payload?.start, end: payload?.end }];
+      : [{ start: payload?.start, end: payload?.end, key: undefined }];
 
   if (rawSegments.length > 100) {
     throw new Error("구간은 한 번에 100개 이하로 선택해 주세요.");
@@ -502,11 +738,15 @@ function normalizeDownloadSegments(payload) {
       throw new Error(`${index + 1}번 구간이 너무 깁니다. 6시간 이하로 선택해 주세요.`);
     }
 
-    return { start, end };
+    return {
+      start,
+      end,
+      key: String(rawSegment?.key || createSegmentKey(start, end))
+    };
   });
 }
 
-function isSupportedYouTubeUrl(rawUrl) {
+function isSupportedYouTubeUrl(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl);
     const host = url.hostname.replace(/^www\./, "");
@@ -521,7 +761,7 @@ function isSupportedYouTubeUrl(rawUrl) {
   }
 }
 
-function sanitizeFileName(value) {
+function sanitizeFileName(value: string): string {
   const safe = value
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
     .replace(/\s+/g, " ")
@@ -531,12 +771,105 @@ function sanitizeFileName(value) {
   return safe || "clip";
 }
 
-function getUniqueOutputPath(targetPath) {
+function sanitizeResumeKey(value: string): string | null {
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+  return safe || null;
+}
+
+function getDownloadCacheRoot(): string {
+  return path.join(app.getPath("temp"), "yt-section-downloader");
+}
+
+function getDownloadCacheDir(resumeKey: string): string {
+  return path.join(getDownloadCacheRoot(), resumeKey);
+}
+
+function getQueueStatePath(): string {
+  return path.join(app.getPath("userData"), "download-queue.json");
+}
+
+function getCompletedSegmentsPath(cacheDir: string): string {
+  return path.join(cacheDir, "completed-segments.json");
+}
+
+async function readCompletedSegments(
+  cacheDir: string
+): Promise<CompletedDownloadSegment[]> {
+  try {
+    const serialized = await fs.readFile(getCompletedSegmentsPath(cacheDir), "utf8");
+    const parsed = JSON.parse(serialized) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (value): value is CompletedDownloadSegment =>
+        Boolean(
+          value &&
+            typeof value === "object" &&
+            typeof (value as CompletedDownloadSegment).key === "string" &&
+            typeof (value as CompletedDownloadSegment).outputPath === "string"
+        )
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function writeCompletedSegments(
+  cacheDir: string,
+  segments: CompletedDownloadSegment[]
+): Promise<void> {
+  const uniqueSegments = [...new Map(
+    segments.map((segment) => [segment.key, segment])
+  ).values()];
+  await fs.writeFile(
+    getCompletedSegmentsPath(cacheDir),
+    JSON.stringify(uniqueSegments),
+    "utf8"
+  );
+}
+
+function normalizeQueueStateJson(serialized: string): string {
+  const stateJson = String(serialized || "");
+  if (Buffer.byteLength(stateJson, "utf8") > 5 * 1024 * 1024) {
+    throw new Error("다운로드 큐 상태가 너무 큽니다.");
+  }
+  JSON.parse(stateJson);
+  return stateJson;
+}
+
+async function writeQueueState(
+  stateJson: string,
+  revision: number
+): Promise<void> {
+  const statePath = getQueueStatePath();
+  const tempPath = `${statePath}.${revision}.tmp`;
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(tempPath, stateJson, "utf8");
+
+  if (revision !== queueStateRevision) {
+    await fs.rm(tempPath, { force: true });
+    return;
+  }
+
+  await fs.rename(tempPath, statePath);
+}
+
+function createSegmentKey(start: number, end: number): string {
+  return `${start.toFixed(3)}-${end.toFixed(3)}`;
+}
+
+function getPartialOutputPath(outputPath: string): string {
+  const parsed = path.parse(outputPath);
+  return path.join(parsed.dir, `${parsed.name}.partial${parsed.ext}`);
+}
+
+function getUniqueOutputPath(targetPath: string): string {
   const parsed = path.parse(targetPath);
   let candidate = targetPath;
   let index = 1;
 
-  while (require("fs").existsSync(candidate)) {
+  while (fsSync.existsSync(candidate)) {
     candidate = path.join(parsed.dir, `${parsed.name}-${index}${parsed.ext}`);
     index += 1;
   }
@@ -544,7 +877,12 @@ function getUniqueOutputPath(targetPath) {
   return candidate;
 }
 
-function getSegmentOutputPaths(outputDir, basename, segmentCount, extension) {
+function getSegmentOutputPaths(
+  outputDir: string,
+  basename: string,
+  segmentCount: number,
+  extension: string
+): string[] {
   if (segmentCount === 1) {
     return [getUniqueOutputPath(path.join(outputDir, `${basename}.${extension}`))];
   }
@@ -557,10 +895,19 @@ function getSegmentOutputPaths(outputDir, basename, segmentCount, extension) {
   });
 }
 
-function buildYtDlpArgs({ request, ffmpegPath, tempTemplate }) {
+function buildYtDlpArgs({
+  request,
+  ffmpegPath,
+  tempTemplate
+}: {
+  request: NormalizedDownloadRequest;
+  ffmpegPath: string;
+  tempTemplate: string;
+}): string[] {
   const args = [
     "--no-playlist",
     "--newline",
+    "--continue",
     "--ffmpeg-location",
     ffmpegPath,
     "-f",
@@ -579,7 +926,7 @@ function buildYtDlpArgs({ request, ffmpegPath, tempTemplate }) {
   return args;
 }
 
-function getYtDlpFormatSelector(downloadQuality) {
+function getYtDlpFormatSelector(downloadQuality: string): string {
   if (downloadQuality === "best") {
     return "bestvideo+bestaudio/best";
   }
@@ -590,21 +937,29 @@ function getYtDlpFormatSelector(downloadQuality) {
   ].join("/");
 }
 
-async function getCommandVersion(command, args) {
+async function getCommandVersion(
+  command: string,
+  args: string[]
+): Promise<DependencyStatus> {
   try {
     const output = await collectProcessOutput(command, args);
     const version = output.split(/\r?\n/).find(Boolean) || "available";
     return { available: true, command, version };
   } catch (error) {
+    const processError = error as ProcessExecutionError;
     return {
       available: false,
       command,
-      error: error.code === "ENOENT" ? "not found" : error.message
+      error:
+        processError.code === "ENOENT" ? "not found" : getErrorMessage(error)
     };
   }
 }
 
-async function assertCommandAvailable(command, displayName) {
+async function assertCommandAvailable(
+  command: string,
+  displayName: BinaryName
+): Promise<void> {
   const status = await getCommandVersion(
     command,
     displayName === "ffmpeg" ? ["-version"] : ["--version"]
@@ -616,8 +971,8 @@ async function assertCommandAvailable(command, displayName) {
   }
 }
 
-function collectProcessOutput(command, args) {
-  return new Promise((resolve, reject) => {
+function collectProcessOutput(command: string, args: string[]): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
     let output = "";
 
@@ -632,7 +987,9 @@ function collectProcessOutput(command, args) {
       if (code === 0) {
         resolve(output);
       } else {
-        const error = new Error(`${command} exited with code ${code}`);
+        const error = new Error(
+          `${command} exited with code ${code}`
+        ) as ProcessExecutionError;
         error.code = code;
         reject(error);
       }
@@ -640,14 +997,18 @@ function collectProcessOutput(command, args) {
   });
 }
 
-function runProcess(command, args, { job, onLine }) {
-  return new Promise((resolve, reject) => {
+function runProcess(
+  command: string,
+  args: string[],
+  { job, onLine }: RunProcessOptions
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
     job.children.push(child);
 
     let buffered = "";
-    const lineTail = [];
-    const emitLines = (chunk) => {
+    const lineTail: string[] = [];
+    const emitLines = (chunk: Buffer) => {
       buffered += chunk.toString();
       const lines = buffered.split(/\r?\n/);
       buffered = lines.pop() || "";
@@ -688,7 +1049,7 @@ function runProcess(command, args, { job, onLine }) {
   });
 }
 
-async function findDownloadedFile(tempDir) {
+async function findDownloadedFile(tempDir: string): Promise<string> {
   const files = await fs.readdir(tempDir);
   const candidates = files
     .filter((file) => /^source\./.test(file))
@@ -709,7 +1070,19 @@ async function findDownloadedFile(tempDir) {
   return withStats[0].filePath;
 }
 
-function buildFfmpegArgs({ encodingPreset, inputPath, outputPath, start, duration }) {
+function buildFfmpegArgs({
+  encodingPreset,
+  inputPath,
+  outputPath,
+  start,
+  duration
+}: {
+  encodingPreset: EncodingPreset;
+  inputPath: string;
+  outputPath: string;
+  start: number;
+  duration: number;
+}): string[] {
   const common = [
     "-hide_banner",
     "-y",
@@ -732,10 +1105,10 @@ function buildFfmpegArgs({ encodingPreset, inputPath, outputPath, start, duratio
     ];
   }
 
-  return [...common, ...encodingPreset.args, outputPath];
+  return [...common, ...(encodingPreset.args || []), outputPath];
 }
 
-function formatTimestamp(totalSeconds) {
+function formatTimestamp(totalSeconds: number): string {
   const safeSeconds = Math.max(0, Number(totalSeconds) || 0);
   const hours = Math.floor(safeSeconds / 3600);
   const minutes = Math.floor((safeSeconds % 3600) / 60);
@@ -744,7 +1117,7 @@ function formatTimestamp(totalSeconds) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${seconds.toFixed(3).padStart(6, "0")}`;
 }
 
-function parseDownloadPercent(line) {
+function parseDownloadPercent(line: string): number | null {
   const match = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
   if (!match) {
     return null;
@@ -753,7 +1126,7 @@ function parseDownloadPercent(line) {
   return Math.min(1, Math.max(0, Number(match[1]) / 100));
 }
 
-function parseFfmpegTimeProgress(line, duration) {
+function parseFfmpegTimeProgress(line: string, duration: number): number | null {
   const match = line.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
   if (!match || duration <= 0) {
     return null;
@@ -762,4 +1135,8 @@ function parseFfmpegTimeProgress(line, duration) {
   const seconds =
     Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
   return Math.min(1, Math.max(0, seconds / duration));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

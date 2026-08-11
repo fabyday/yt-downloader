@@ -227,6 +227,10 @@ select:focus {
   z-index: 2;
 }
 
+.player-stage.has-video {
+  cursor: pointer;
+}
+
 .timeline-range {
   background: rgba(242, 193, 78, 0.34);
   z-index: 3;
@@ -358,6 +362,14 @@ select:focus {
 
 .timeline-marker-end {
   background: #e4572e;
+}
+
+.timeline-marker.marker-overlap-start {
+  transform: translateX(-100%);
+}
+
+.timeline-marker.marker-overlap-end {
+  transform: translateX(0);
 }
 
 .transport {
@@ -786,7 +798,19 @@ select:focus {
   border: 1px solid #2c3340;
   border-radius: 8px;
   background: #15191f;
+  cursor: pointer;
   padding: 10px;
+}
+
+.queue-row:hover,
+.queue-row:focus-visible {
+  background: #1a2028;
+  outline: none;
+}
+
+.queue-row.editing {
+  border-color: #f2c14e;
+  box-shadow: inset 3px 0 0 #f2c14e;
 }
 
 .queue-row.running {
