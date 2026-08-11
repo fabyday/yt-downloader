@@ -1,0 +1,23 @@
+{
+  "name": "yt-section-downloader",
+  "version": "0.1.0",
+  "description": "Electron app for previewing YouTube videos and downloading selected clips.",
+  "main": "src/main/main.cjs",
+  "type": "commonjs",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "youtube",
+    "yt-dlp",
+    "ffmpeg"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^39.2.7"
+  }
+}

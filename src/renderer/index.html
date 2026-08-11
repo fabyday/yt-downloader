@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://www.youtube.com https://s.ytimg.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://*.googlevideo.com; img-src 'self' data: https:; style-src 'self';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YT Section Downloader</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <div class="input-bar">
+          <label class="url-field">
+            <span>YouTube URL</span>
+            <input
+              id="urlInput"
+              type="url"
+              placeholder="https://www.youtube.com/watch?v=..."
+              autocomplete="off"
+            />
+          </label>
+          <button id="loadButton" class="primary-button" type="button">
+            불러오기
+          </button>
+        </div>
+
+        <section id="videoInfo" class="video-info hidden" aria-live="polite">
+          <strong id="videoTitle"></strong>
+        </section>
+
+        <div id="playerStage" class="player-stage">
+          <div class="player-viewport">
+            <div id="player" class="player-placeholder">
+              <span>URL을 입력하면 미리보기가 여기에 표시됩니다.</span>
+            </div>
+          </div>
+        </div>
+
+        <section class="timeline-panel">
+          <div class="timeline-meta">
+            <span>재생 위치</span>
+            <strong id="durationTime">--:--.---</strong>
+          </div>
+          <div id="timelineShell" class="timeline-shell">
+            <div class="timeline-track" aria-hidden="true">
+              <div id="timelineRange" class="timeline-range hidden"></div>
+              <div id="timelineFill" class="timeline-fill"></div>
+            </div>
+            <button
+              id="startMarkerHandle"
+              class="timeline-marker timeline-marker-start hidden"
+              type="button"
+              aria-label="시작 지점 조절"
+            ></button>
+            <button
+              id="endMarkerHandle"
+              class="timeline-marker timeline-marker-end hidden"
+              type="button"
+              aria-label="끝 지점 조절"
+            ></button>
+            <input
+              id="timelineInput"
+              class="timeline-input"
+              type="range"
+              min="0"
+              max="0"
+              step="0.01"
+              value="0"
+              aria-label="재생 위치"
+              disabled
+            />
+          </div>
+        </section>
+
+        <section class="transport">
+          <div class="time-readout">
+            <span class="label">현재</span>
+            <strong id="currentTime">00:00.000</strong>
+          </div>
+
+          <div class="button-row">
+            <button id="backFineButton" class="icon-button" type="button" title="0.1초 뒤로">
+              -0.1
+            </button>
+            <button id="backButton" class="icon-button" type="button" title="1초 뒤로">
+              -1
+            </button>
+            <button id="playPauseButton" class="control-button" type="button">
+              재생/정지
+            </button>
+            <button id="forwardButton" class="icon-button" type="button" title="1초 앞으로">
+              +1
+            </button>
+            <button id="forwardFineButton" class="icon-button" type="button" title="0.1초 앞으로">
+              +0.1
+            </button>
+          </div>
+
+          <label class="loop-toggle">
+            <input id="loopToggle" type="checkbox" />
+            <span>구간 반복</span>
+          </label>
+        </section>
+
+        <section class="markers">
+          <div class="marker-row">
+            <div>
+              <span class="label">시작 지점</span>
+              <strong id="startTime">--:--.---</strong>
+            </div>
+            <button id="setStartButton" type="button">현재 위치로 설정</button>
+          </div>
+
+          <div class="marker-row">
+            <div>
+              <span class="label">끝 지점</span>
+              <strong id="endTime">--:--.---</strong>
+            </div>
+            <button id="setEndButton" type="button">현재 위치로 설정</button>
+          </div>
+        </section>
+      </section>
+
+      <aside class="download-panel">
+        <header>
+          <h1>구간 다운로드</h1>
+          <p>iframe 미리보기로 시간을 고르고, yt-dlp와 ffmpeg로 저장합니다.</p>
+        </header>
+
+        <section class="status-panel">
+          <div id="ytDlpStatus" class="dependency missing">yt-dlp 확인 중</div>
+          <div id="ffmpegStatus" class="dependency missing">ffmpeg 확인 중</div>
+        </section>
+
+        <label class="field">
+          <span>파일 이름</span>
+          <input id="basenameInput" type="text" placeholder="clip" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span>저장 폴더</span>
+          <div class="folder-row">
+            <input id="outputDirInput" type="text" readonly />
+            <button id="selectFolderButton" type="button">선택</button>
+          </div>
+        </label>
+
+        <fieldset class="mode-picker">
+          <legend>컷 방식</legend>
+          <label>
+            <input type="radio" name="cutMode" value="exact" checked />
+            <span>
+              <strong>정확 컷</strong>
+              <small>libx264/aac 재인코딩</small>
+            </span>
+          </label>
+          <label>
+            <input type="radio" name="cutMode" value="copy" />
+            <span>
+              <strong>빠른 컷</strong>
+              <small>-c copy, 키프레임 영향 있음</small>
+            </span>
+          </label>
+        </fieldset>
+
+        <button id="downloadButton" class="download-button" type="button">
+          이 구간 다운로드
+        </button>
+
+        <section class="progress-panel">
+          <div class="progress-track">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div id="progressLabel" class="progress-label">대기 중</div>
+          <pre id="logOutput" class="log-output"></pre>
+        </section>
+
+        <button id="openOutputButton" class="secondary-button hidden" type="button">
+          저장 위치 열기
+        </button>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
