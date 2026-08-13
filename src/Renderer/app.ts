@@ -1,22 +1,66 @@
 import type {
   DependencyStatus,
-  DownloadProgress,
+  DependencyStatuses,
+  AppPreferences,
+  DownloadQueueItem,
+  DownloadQueueStatus,
   DownloadRequest,
-  DownloadSegment
+  DownloadSegment,
+  EditorSnapshot,
+  RendererViewMode
 } from "../Shared/types";
+import {
+  DEFAULT_APP_PREFERENCES,
+  normalizeAppPreferences,
+} from "../Shared/preferences";
+import {
+  getLocale,
+  initializeI18n,
+  LOCALE_CHANGE_EVENT,
+  translate as t
+} from "./i18n";
+import { mountRendererUi, setRendererSelectValue } from "./ui";
+import { initializeQueueWindow } from "./queueWindow";
+import {
+  configureRendererViewActions,
+  setDownloadSegmentViewItems,
+  setPresetDetails,
+  setPresetFormats,
+  setQueueViewItems,
+  setSegmentViewItems,
+  setTimelineRulerViewItems,
+  setTimelineSegmentViewItems
+} from "./viewStore";
 
 const LOOP_EPSILON = 0.05;
 const SEEK_SETTLE_EPSILON = 0.35;
-const QUEUE_LOG_LIMIT = 120;
-const DEFAULT_OUTPUT_DIR = "";
+const SEEK_SETTLE_TIMEOUT_MS = 1200;
+const MARKER_PLAYHEAD_EPSILON = 0.01;
+const TIMELINE_MIN_ZOOM = 1;
+const TIMELINE_MAX_ZOOM = 64;
+const TIMELINE_ZOOM_STEP = 1.25;
+const TIMELINE_MAJOR_TICK_PIXELS = 90;
+const SEGMENT_COLOR_PALETTE = [
+  [95, 188, 123],
+  [88, 196, 221],
+  [242, 193, 78],
+  [181, 126, 220],
+  [228, 87, 46],
+  [104, 132, 236],
+  [224, 112, 168],
+  [82, 190, 170],
+] as const;
 interface OutputPreset {
   id: string;
-  name: string;
+  nameKey: string | null;
+  fallbackName: string;
   extension: string;
   container: string;
-  video: string;
-  audio: string;
-  target: string;
+  videoKey: string | null;
+  fallbackVideo: string;
+  audioKey: string | null;
+  fallbackAudio: string;
+  targetKey: string;
 }
 
 interface LinkTimeRange {
@@ -33,41 +77,13 @@ interface KeyedDownloadSegment extends DownloadSegment {
 }
 
 type MarkerKind = "start" | "end";
-type QueueStatus = "queued" | "running" | "done" | "error";
-type TimelineInteraction = "scrub" | "marker" | null;
-
-interface EditorSnapshot {
-  startTime: number | null;
-  endTime: number | null;
-  rangeIsDefault: boolean;
-  segments: DownloadSegment[];
-}
+type TimeDragKind = "playback" | MarkerKind;
+type TimelineInteraction = "scrub" | "marker" | "readout" | null;
 
 interface PendingPlayerRequest {
   videoId: string;
   initialRange: LinkTimeRange | null;
   editorRestore: EditorSnapshot | null;
-}
-
-interface DownloadQueueItem {
-  id: string;
-  payload: DownloadRequest;
-  title: string;
-  segmentsCount: number;
-  presetName: string;
-  qualityLabel: string;
-  speedLabel: string;
-  status: QueueStatus;
-  progress: number;
-  message: string;
-  outputPath: string | null;
-  outputPaths: string[];
-  error: string | null;
-  jobId: string | null;
-  log: string[];
-  completedSegmentKeys: string[];
-  currentAttemptKeys: string[];
-  editorSnapshot: EditorSnapshot;
 }
 
 interface RendererState {
@@ -92,50 +108,65 @@ interface RendererState {
   pendingSeekTime: number | null;
   pendingSeekStartedAt: number;
   lastTimelineSeekAt: number;
-  activeJobId: string | null;
+  timelineViewportStart: number;
+  timelineZoom: number;
   downloadQueue: DownloadQueueItem[];
-  activeQueueItemId: string | null;
-  isQueueRunning: boolean;
   lastOutputPath: string | null;
   editingQueueItemId: string | null;
+  highlightedSegmentId: number | null;
+  segmentPulseRevision: number;
+  playbackAllowed: boolean;
+  preferences: AppPreferences;
 }
 
 const OUTPUT_PRESETS: OutputPreset[] = [
   {
     id: "youtube-copy",
-    name: "YouTube 원본 유지",
+    nameKey: "preset.youtubeCopy.name",
+    fallbackName: "YouTube source",
     extension: "mkv",
     container: "MKV",
-    video: "원본 스트림 복사",
-    audio: "원본 스트림 복사",
-    target: "재인코딩 없이 빠르게 저장"
+    videoKey: "preset.youtubeCopy.video",
+    fallbackVideo: "Source stream copy",
+    audioKey: "preset.youtubeCopy.audio",
+    fallbackAudio: "Source stream copy",
+    targetKey: "preset.youtubeCopy.target"
   },
   {
     id: "h264-mp4",
-    name: "H.264 MP4",
+    nameKey: null,
+    fallbackName: "H.264 MP4",
     extension: "mp4",
     container: "MP4",
-    video: "H.264 libx264, CRF 18",
-    audio: "AAC 192k",
-    target: "일반 공유, Premiere, DaVinci 호환"
+    videoKey: null,
+    fallbackVideo: "H.264 libx264, CRF 18",
+    audioKey: null,
+    fallbackAudio: "AAC 192k",
+    targetKey: "preset.h264.target"
   },
   {
     id: "premiere-prores",
-    name: "Premiere ProRes 422 HQ",
+    nameKey: null,
+    fallbackName: "Premiere ProRes 422 HQ",
     extension: "mov",
     container: "MOV",
-    video: "Apple ProRes 422 HQ 10-bit",
-    audio: "PCM 16-bit",
-    target: "Premiere 편집용 중간 코덱"
+    videoKey: null,
+    fallbackVideo: "Apple ProRes 422 HQ 10-bit",
+    audioKey: null,
+    fallbackAudio: "PCM 16-bit",
+    targetKey: "preset.prores.target"
   },
   {
     id: "davinci-dnxhr",
-    name: "DaVinci DNxHR HQX",
+    nameKey: null,
+    fallbackName: "DaVinci DNxHR HQX",
     extension: "mov",
     container: "MOV",
-    video: "DNxHR HQX 10-bit",
-    audio: "PCM 16-bit",
-    target: "DaVinci Resolve 편집용 중간 코덱"
+    videoKey: null,
+    fallbackVideo: "DNxHR HQX 10-bit",
+    audioKey: null,
+    fallbackAudio: "PCM 16-bit",
+    targetKey: "preset.dnxhr.target"
   }
 ];
 
@@ -161,15 +192,19 @@ const state: RendererState = {
   pendingSeekTime: null,
   pendingSeekStartedAt: 0,
   lastTimelineSeekAt: 0,
-  activeJobId: null,
+  timelineViewportStart: 0,
+  timelineZoom: TIMELINE_MIN_ZOOM,
   downloadQueue: [],
-  activeQueueItemId: null,
-  isQueueRunning: false,
   lastOutputPath: null,
-  editingQueueItemId: null
+  editingQueueItemId: null,
+  highlightedSegmentId: null,
+  segmentPulseRevision: 0,
+  playbackAllowed: false,
+  preferences: DEFAULT_APP_PREFERENCES,
 };
-let queuePersistenceReady = false;
-let queuePersistTimer: number | null = null;
+let dependencyStatuses: DependencyStatuses | null = null;
+let timelineRulerSignature = "";
+let timelineSegmentsSignature = "";
 
 function getElement<T extends HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -179,21 +214,27 @@ function getElement<T extends HTMLElement>(selector: string): T {
   return element;
 }
 
-const elements = {
+function collectElements() {
+  return {
   urlInput: getElement<HTMLInputElement>("#urlInput"),
   loadButton: getElement<HTMLButtonElement>("#loadButton"),
-  videoInfo: getElement<HTMLElement>("#videoInfo"),
-  videoTitle: getElement<HTMLElement>("#videoTitle"),
   playerStage: getElement<HTMLElement>("#playerStage"),
   player: getElement<HTMLElement>("#player"),
   currentTime: getElement<HTMLElement>("#currentTime"),
   durationTime: getElement<HTMLElement>("#durationTime"),
+  timelineRuler: getElement<HTMLButtonElement>("#timelineRuler"),
+  timelineRulerPlayhead: getElement<HTMLElement>("#timelineRulerPlayhead"),
+  timelineViewportLabel: getElement<HTMLElement>("#timelineViewportLabel"),
+  timelineZoomLabel: getElement<HTMLElement>("#timelineZoomLabel"),
+  timelineZoomOutButton: getElement<HTMLButtonElement>("#timelineZoomOutButton"),
+  timelineZoomResetButton: getElement<HTMLButtonElement>("#timelineZoomResetButton"),
+  timelineZoomInButton: getElement<HTMLButtonElement>("#timelineZoomInButton"),
   timelineShell: getElement<HTMLElement>("#timelineShell"),
   timelineInput: getElement<HTMLInputElement>("#timelineInput"),
   timelineFill: getElement<HTMLElement>("#timelineFill"),
   timelineRange: getElement<HTMLElement>("#timelineRange"),
-  timelineSegments: getElement<HTMLElement>("#timelineSegments"),
   currentTimeAnchor: getElement<HTMLElement>("#currentTimeAnchor"),
+  currentTimeHandle: getElement<HTMLButtonElement>("#currentTimeHandle"),
   startMarkerHandle: getElement<HTMLButtonElement>("#startMarkerHandle"),
   endMarkerHandle: getElement<HTMLButtonElement>("#endMarkerHandle"),
   startTime: getElement<HTMLElement>("#startTime"),
@@ -207,48 +248,98 @@ const elements = {
   segmentCount: getElement<HTMLElement>("#segmentCount"),
   segmentList: getElement<HTMLElement>("#segmentList"),
   playPauseButton: getElement<HTMLButtonElement>("#playPauseButton"),
-  backFineButton: getElement<HTMLButtonElement>("#backFineButton"),
-  backButton: getElement<HTMLButtonElement>("#backButton"),
-  forwardButton: getElement<HTMLButtonElement>("#forwardButton"),
-  forwardFineButton: getElement<HTMLButtonElement>("#forwardFineButton"),
+  backLargeButton: getElement<HTMLButtonElement>("#backLargeButton"),
+  backSmallButton: getElement<HTMLButtonElement>("#backSmallButton"),
+  backFrameButton: getElement<HTMLButtonElement>("#backFrameButton"),
+  forwardFrameButton: getElement<HTMLButtonElement>("#forwardFrameButton"),
+  forwardSmallButton: getElement<HTMLButtonElement>("#forwardSmallButton"),
+  forwardLargeButton: getElement<HTMLButtonElement>("#forwardLargeButton"),
   loopToggle: getElement<HTMLInputElement>("#loopToggle"),
-  setupViewButton: getElement<HTMLButtonElement>("#setupViewButton"),
-  queueViewButton: getElement<HTMLButtonElement>("#queueViewButton"),
-  queueBadge: getElement<HTMLElement>("#queueBadge"),
-  setupView: getElement<HTMLElement>("#setupView"),
-  queueView: getElement<HTMLElement>("#queueView"),
   setupStatusLabel: getElement<HTMLElement>("#setupStatusLabel"),
-  queueSummary: getElement<HTMLElement>("#queueSummary"),
-  queueList: getElement<HTMLElement>("#queueList"),
   basenameInput: getElement<HTMLInputElement>("#basenameInput"),
   outputDirInput: getElement<HTMLInputElement>("#outputDirInput"),
   selectFolderButton: getElement<HTMLButtonElement>("#selectFolderButton"),
-  downloadQualitySelect: getElement<HTMLSelectElement>("#downloadQualitySelect"),
-  speedLimitSelect: getElement<HTMLSelectElement>("#speedLimitSelect"),
-  encodingPresetSelect: getElement<HTMLSelectElement>("#encodingPresetSelect"),
-  presetDetails: getElement<HTMLElement>("#presetDetails"),
-  presetFormatList: getElement<HTMLElement>("#presetFormatList"),
+  downloadQualitySelect: getElement<HTMLButtonElement>("#downloadQualitySelect"),
+  speedLimitSelect: getElement<HTMLButtonElement>("#speedLimitSelect"),
+  encodingPresetSelect: getElement<HTMLButtonElement>("#encodingPresetSelect"),
   downloadButton: getElement<HTMLButtonElement>("#downloadButton"),
-  progressFill: getElement<HTMLElement>("#progressFill"),
-  progressLabel: getElement<HTMLElement>("#progressLabel"),
-  logOutput: getElement<HTMLPreElement>("#logOutput"),
   ytDlpStatus: getElement<HTMLElement>("#ytDlpStatus"),
-  ffmpegStatus: getElement<HTMLElement>("#ffmpegStatus"),
-  openOutputButton: getElement<HTMLButtonElement>("#openOutputButton")
-};
+  ffmpegStatus: getElement<HTMLElement>("#ffmpegStatus")
+  };
+}
 
-elements.outputDirInput.value = DEFAULT_OUTPUT_DIR;
+type RendererElements = ReturnType<typeof collectElements>;
+let elements: RendererElements;
 
-renderEncodingPresetOptions();
-renderEncodingPresetDetails();
-renderSegmentList();
-syncRangeDisplay();
-renderDownloadQueue();
-loadDependencies();
-bindEvents();
-loadYouTubeApi();
-startTicker();
-initializeDownloadQueue();
+async function initializeRenderer(): Promise<void> {
+  await initializeI18n();
+  const rendererMode = getRendererMode();
+  mountRendererUi(rendererMode);
+  if (rendererMode === "shell") return;
+  if (rendererMode === "queue") {
+    await initializeQueueWindow();
+    return;
+  }
+  elements = collectElements();
+  try {
+    applyPreferences(await window.ytClipper.getPreferences());
+  } catch {
+    applyPreferences(DEFAULT_APP_PREFERENCES);
+  }
+  configureRendererViewActions({
+    openOutput: (outputPath) => {
+      void window.ytClipper
+        .openOutput(outputPath)
+        .catch(handleRendererRequestError);
+    },
+    previewSegment: (segmentId) => {
+      const segment = state.segments.find((candidate) => candidate.id === segmentId);
+      if (segment) {
+        loadSegmentToMarkers(segment);
+      }
+    },
+    focusDownloadSegment: (segmentId) => {
+      if (segmentId === null) {
+        focusCurrentSelection();
+        return;
+      }
+      const segment = state.segments.find((candidate) => candidate.id === segmentId);
+      if (segment) loadSegmentToMarkers(segment);
+    },
+    removeQueueItem: (itemId) => {
+      void removeQueueItem(itemId).catch(handleRendererRequestError);
+    },
+    removeSegment,
+    restoreQueueItem: (itemId) => {
+      const item = state.downloadQueue.find((candidate) => candidate.id === itemId);
+      if (item) {
+        restoreQueueItem(item);
+      }
+    }
+  });
+
+  renderEncodingPresetOptions();
+  renderEncodingPresetDetails();
+  renderSegmentList();
+  syncRangeDisplay();
+  renderDownloadQueue();
+  bindEvents();
+  const sourceUrl = new URLSearchParams(window.location.search).get("sourceUrl");
+  if (sourceUrl) {
+    elements.urlInput.value = sourceUrl;
+    loadVideoFromInput();
+  }
+  void loadDependencies();
+  loadYouTubeApi();
+  startTicker();
+  initializeDownloadQueue();
+  window.ytClipper.onPreferencesChanged(applyPreferences);
+  window.addEventListener(LOCALE_CHANGE_EVENT, handleLocaleChange);
+}
+
+void initializeRenderer().catch((error) => {
+  console.error("Failed to initialize renderer", error);
+});
 
 function bindEvents() {
   elements.loadButton.addEventListener("click", loadVideoFromInput);
@@ -271,10 +362,20 @@ function bindEvents() {
       togglePlayback();
     }
   });
-  elements.backFineButton.addEventListener("click", () => seekRelative(-0.1));
-  elements.backButton.addEventListener("click", () => seekRelative(-1));
-  elements.forwardButton.addEventListener("click", () => seekRelative(1));
-  elements.forwardFineButton.addEventListener("click", () => seekRelative(0.1));
+  elements.backLargeButton.addEventListener("click", () =>
+    seekRelative(-state.preferences.seekLargeSeconds),
+  );
+  elements.backSmallButton.addEventListener("click", () =>
+    seekRelative(-state.preferences.seekSmallSeconds),
+  );
+  elements.backFrameButton.addEventListener("click", () => seekByFrame(-1));
+  elements.forwardFrameButton.addEventListener("click", () => seekByFrame(1));
+  elements.forwardSmallButton.addEventListener("click", () =>
+    seekRelative(state.preferences.seekSmallSeconds),
+  );
+  elements.forwardLargeButton.addEventListener("click", () =>
+    seekRelative(state.preferences.seekLargeSeconds),
+  );
   elements.timelineInput.addEventListener("pointerdown", (event) => {
     if (state.timelineInteraction !== null) {
       return;
@@ -287,52 +388,158 @@ function bindEvents() {
   elements.timelineInput.addEventListener("change", finishTimelineScrub);
   elements.timelineInput.addEventListener("pointerup", finishTimelineScrub);
   elements.timelineInput.addEventListener("pointercancel", finishTimelineScrub);
+  elements.currentTimeHandle.addEventListener("pointerdown", (event) => {
+    beginTimelinePositionDrag(event);
+  });
+  elements.timelineRuler.addEventListener("pointerdown", (event) => {
+    beginTimelineRulerDrag(event);
+  });
+  elements.timelineRuler.addEventListener("keydown", (event) => {
+    handleTimeDragKey(event, "playback");
+  });
+  elements.timelineRuler.addEventListener("wheel", handleTimelineWheel, {
+    passive: false
+  });
+  elements.timelineShell.addEventListener("wheel", handleTimelineWheel, {
+    passive: false
+  });
+  elements.timelineZoomOutButton.addEventListener("click", () => {
+    zoomTimelineFromControl(1 / TIMELINE_ZOOM_STEP);
+  });
+  elements.timelineZoomResetButton.addEventListener("click", resetTimelineZoom);
+  elements.timelineZoomInButton.addEventListener("click", () => {
+    zoomTimelineFromControl(TIMELINE_ZOOM_STEP);
+  });
   elements.startMarkerHandle.addEventListener("pointerdown", (event) => {
     beginMarkerDrag(event, "start");
   });
   elements.endMarkerHandle.addEventListener("pointerdown", (event) => {
     beginMarkerDrag(event, "end");
   });
+  elements.currentTime.addEventListener("pointerdown", (event) => {
+    beginTimeReadoutDrag(event, "playback");
+  });
+  elements.startTime.addEventListener("pointerdown", (event) => {
+    beginTimeReadoutDrag(event, "start");
+  });
+  elements.endTime.addEventListener("pointerdown", (event) => {
+    beginTimeReadoutDrag(event, "end");
+  });
+  elements.currentTimeHandle.addEventListener("keydown", (event) => {
+    handleTimeDragKey(event, "playback");
+  });
+  elements.currentTime.addEventListener("keydown", (event) => {
+    handleTimeDragKey(event, "playback");
+  });
+  elements.startTime.addEventListener("keydown", (event) => {
+    handleTimeDragKey(event, "start");
+  });
+  elements.endTime.addEventListener("keydown", (event) => {
+    handleTimeDragKey(event, "end");
+  });
   elements.loopToggle.addEventListener("change", () => {
     state.loopEnabled = elements.loopToggle.checked;
   });
 
-  elements.setupViewButton.addEventListener("click", () => switchDownloadView("setup"));
-  elements.queueViewButton.addEventListener("click", () => switchDownloadView("queue"));
-
-  elements.selectFolderButton.addEventListener("click", async () => {
-    const directory = await window.ytClipper.selectOutputDir();
-    if (directory) {
-      elements.outputDirInput.value = directory;
-    }
+  elements.selectFolderButton.addEventListener("click", () => {
+    void selectOutputDirectory().catch(handleRendererRequestError);
   });
 
-  elements.downloadButton.addEventListener("click", downloadSection);
-  elements.openOutputButton.addEventListener("click", () => {
-    if (state.lastOutputPath) {
-      window.ytClipper.openOutput(state.lastOutputPath);
-    }
+  elements.downloadButton.addEventListener("click", () => {
+    void downloadSection().catch(handleRendererRequestError);
   });
-
-  window.ytClipper.onDownloadProgress(handleDownloadProgress);
+  window.ytClipper.onDownloadQueueChanged(applyDownloadQueueSnapshot);
   window.addEventListener("keydown", handleShortcuts);
-  window.addEventListener("beforeunload", flushDownloadQueueState);
 }
 
-function switchDownloadView(view: "setup" | "queue"): void {
-  const showQueue = view === "queue";
-  elements.setupViewButton.classList.toggle("active", !showQueue);
-  elements.queueViewButton.classList.toggle("active", showQueue);
-  elements.setupView.classList.toggle("active", !showQueue);
-  elements.setupView.classList.toggle("hidden", showQueue);
-  elements.queueView.classList.toggle("active", showQueue);
-  elements.queueView.classList.toggle("hidden", !showQueue);
+async function selectOutputDirectory(): Promise<void> {
+  const directory = await window.ytClipper.selectOutputDir(getLocale());
+  if (directory) {
+    elements.outputDirInput.value = directory;
+  }
+}
+
+function applyPreferences(preferences: AppPreferences): void {
+  state.preferences = normalizeAppPreferences(preferences, state.preferences);
+  if (!state.editingQueueItemId) {
+    elements.outputDirInput.value = state.preferences.defaultOutputDir;
+    setRendererSelectValue(
+      elements.downloadQualitySelect,
+      state.preferences.defaultDownloadQuality,
+    );
+    setRendererSelectValue(
+      elements.speedLimitSelect,
+      state.preferences.defaultSpeedLimit,
+    );
+    setRendererSelectValue(
+      elements.encodingPresetSelect,
+      state.preferences.defaultEncodingPreset,
+    );
+    renderEncodingPresetDetails();
+  }
+  renderPlaybackStepControls();
+}
+
+function renderPlaybackStepControls(): void {
+  const large = formatSeekStep(state.preferences.seekLargeSeconds);
+  const small = formatSeekStep(state.preferences.seekSmallSeconds);
+  elements.backLargeButton.textContent = `−${large}`;
+  elements.backSmallButton.textContent = `−${small}`;
+  elements.forwardSmallButton.textContent = `+${small}`;
+  elements.forwardLargeButton.textContent = `+${large}`;
+  elements.backLargeButton.title = t("playback.backSeconds", { seconds: large });
+  elements.backSmallButton.title = t("playback.backSeconds", { seconds: small });
+  elements.forwardSmallButton.title = t("playback.forwardSeconds", {
+    seconds: small,
+  });
+  elements.forwardLargeButton.title = t("playback.forwardSeconds", {
+    seconds: large,
+  });
+  elements.backFrameButton.title = t("playback.backFrameAtRate", {
+    frameRate: formatSeekStep(state.preferences.frameRate),
+  });
+  elements.forwardFrameButton.title = t("playback.forwardFrameAtRate", {
+    frameRate: formatSeekStep(state.preferences.frameRate),
+  });
+}
+
+function formatSeekStep(value: number): string {
+  return Number(value.toFixed(3)).toString();
+}
+
+function applyDownloadQueueSnapshot(items: DownloadQueueItem[]): void {
+  state.downloadQueue = items;
+  if (
+    state.editingQueueItemId &&
+    !items.some((item) => item.id === state.editingQueueItemId)
+  ) {
+    state.editingQueueItemId = null;
+  }
+  renderDownloadQueue();
+}
+
+function handleLocaleChange(): void {
+  renderEncodingPresetOptions();
+  renderEncodingPresetDetails();
+  renderSegmentList();
+  syncRangeDisplay();
+  updateDownloadButtonLabel();
+  updatePlaybackButton();
+  renderDownloadQueue();
+  timelineRulerSignature = "";
+  renderTimeline();
+  renderPlaybackStepControls();
+
+  if (dependencyStatuses) {
+    renderDependency(elements.ytDlpStatus, "yt-dlp", dependencyStatuses.ytDlp);
+    renderDependency(elements.ffmpegStatus, "ffmpeg", dependencyStatuses.ffmpeg);
+  }
 }
 
 async function loadDependencies(): Promise<void> {
-  const status = await window.ytClipper.getDependencyStatus();
-  renderDependency(elements.ytDlpStatus, "yt-dlp", status.ytDlp);
-  renderDependency(elements.ffmpegStatus, "ffmpeg", status.ffmpeg);
+  dependencyStatuses = await window.ytClipper.getDependencyStatus();
+  renderDependency(elements.ytDlpStatus, "yt-dlp", dependencyStatuses.ytDlp);
+  renderDependency(elements.ffmpegStatus, "ffmpeg", dependencyStatuses.ffmpeg);
 }
 
 function renderDependency(
@@ -342,53 +549,55 @@ function renderDependency(
 ): void {
   element.classList.toggle("ready", status.available);
   element.classList.toggle("missing", !status.available);
-  element.textContent = status.available
+  const text = status.available
     ? `${name}: ${status.version}`
-    : `${name}: 필요함`;
+    : status.reason === "outdated"
+      ? t("dependency.outdated", {
+          name,
+          version: status.version || "?",
+          minimum: status.minimumVersion || "?"
+        })
+      : t("dependency.required", { name });
+  const label = element.querySelector<HTMLElement>(".dependency-label");
+
+  if (label) {
+    label.textContent = text;
+  } else {
+    element.textContent = text;
+  }
+
+  element.title = text;
 }
 
 function renderEncodingPresetOptions(): void {
-  const options = OUTPUT_PRESETS.map((preset) => {
-    const option = document.createElement("option");
-    option.value = preset.id;
-    option.textContent = preset.name;
-    return option;
-  });
-
-  elements.encodingPresetSelect.replaceChildren(...options);
-  elements.encodingPresetSelect.value = "youtube-copy";
-
-  const rows = OUTPUT_PRESETS.map((preset) => {
-    const row = document.createElement("div");
-    row.className = "format-row";
-
-    const name = document.createElement("div");
-    name.className = "format-name";
-    name.textContent = `${preset.name} (.${preset.extension})`;
-
-    const meta = document.createElement("div");
-    meta.className = "format-meta";
-    meta.textContent = `${preset.container} / ${preset.video} / ${preset.audio}`;
-
-    row.append(name, meta);
-    return row;
-  });
-
-  elements.presetFormatList.replaceChildren(...rows);
+  setPresetFormats(
+    OUTPUT_PRESETS.map((preset) => ({
+      id: preset.id,
+      name: `${getPresetName(preset)} (.${preset.extension})`,
+      meta: `${preset.container} / ${getPresetVideo(preset)} / ${getPresetAudio(preset)}`
+    }))
+  );
 }
 
 function renderEncodingPresetDetails(): void {
   const preset = getSelectedOutputPreset();
 
-  const title = document.createElement("div");
-  title.className = "preset-title";
-  title.textContent = `${preset.name} -> .${preset.extension}`;
+  setPresetDetails({
+    title: `${getPresetName(preset)} -> .${preset.extension}`,
+    meta: `${t(preset.targetKey)} | ${preset.container} / ${getPresetVideo(preset)} / ${getPresetAudio(preset)}`
+  });
+}
 
-  const meta = document.createElement("div");
-  meta.className = "preset-meta";
-  meta.textContent = `${preset.target} | ${preset.container} / ${preset.video} / ${preset.audio}`;
+function getPresetName(preset: OutputPreset): string {
+  return preset.nameKey ? t(preset.nameKey) : preset.fallbackName;
+}
 
-  elements.presetDetails.replaceChildren(title, meta);
+function getPresetVideo(preset: OutputPreset): string {
+  return preset.videoKey ? t(preset.videoKey) : preset.fallbackVideo;
+}
+
+function getPresetAudio(preset: OutputPreset): string {
+  return preset.audioKey ? t(preset.audioKey) : preset.fallbackAudio;
 }
 
 function getSelectedOutputPreset(): OutputPreset {
@@ -430,7 +639,7 @@ function loadVideoFromInput(): void {
   const link = parseYouTubeLink(elements.urlInput.value);
   const videoId = link.videoId;
   if (!videoId) {
-    setProgressLabel("유효한 YouTube URL을 입력해 주세요.");
+    setProgressLabel(t("status.invalidUrl"));
     return;
   }
 
@@ -453,9 +662,9 @@ function createOrLoadPlayer(
   state.expectedVideoId = videoId;
   elements.playerStage.classList.add("has-video");
 
-  if (state.player?.loadVideoById) {
+  if (state.player?.cueVideoById) {
     state.playerReady = false;
-    state.player.loadVideoById(videoId);
+    state.player.cueVideoById(videoId);
     window.setTimeout(() => {
       updateVideoMeta();
       updatePlaybackButton();
@@ -465,7 +674,7 @@ function createOrLoadPlayer(
 
   if (!window.YT?.Player) {
     state.pendingPlayerRequest = { videoId, initialRange, editorRestore };
-    setProgressLabel("YouTube 플레이어 API를 불러오는 중입니다.");
+    setProgressLabel(t("status.loadingPlayer"));
     return;
   }
 
@@ -489,11 +698,19 @@ function createOrLoadPlayer(
     events: {
       onReady: () => {
         state.playerReady = true;
+        state.playbackAllowed = false;
+        const readyPlayer = state.player;
+        if (
+          readyPlayer &&
+          readyPlayer.getPlayerState() === window.YT?.PlayerState.PLAYING
+        ) {
+          readyPlayer.pauseVideo();
+        }
         updateDuration();
         updateVideoMeta();
         updatePlaybackButton();
         renderTimeline();
-        setProgressLabel("미리보기 준비 완료");
+        setProgressLabel(t("status.previewReady"));
       },
       onStateChange: handlePlayerStateChange
     }
@@ -511,13 +728,17 @@ function resetMarkers(): void {
   state.currentTime = 0;
   state.duration = 0;
   state.videoTitle = "";
+  state.playbackAllowed = false;
+  state.highlightedSegmentId = null;
   state.isScrubbing = false;
   state.draggingMarker = null;
   state.timelineInteraction = null;
   state.pendingSeekTime = null;
   state.pendingSeekStartedAt = 0;
-  elements.videoTitle.textContent = "";
-  elements.videoInfo.classList.add("hidden");
+  state.timelineViewportStart = 0;
+  state.timelineZoom = TIMELINE_MIN_ZOOM;
+  timelineRulerSignature = "";
+  timelineSegmentsSignature = "";
   elements.startTime.textContent = "--:--.---";
   elements.endTime.textContent = "--:--.---";
   elements.durationTime.textContent = "--:--.---";
@@ -539,30 +760,68 @@ function startTicker(): void {
     const playerTime = state.player.getCurrentTime();
     reconcilePendingSeek(playerTime);
 
-    if (!state.isScrubbing && !state.draggingMarker) {
+    if (handlePlaybackRangeBoundary(playerTime)) {
+      return;
+    }
+
+    if (!state.isScrubbing) {
       if (state.pendingSeekTime === null) {
         state.currentTime = playerTime;
       }
+      if (state.timelineInteraction === null) {
+        ensureTimelineTimeVisible(getDisplayedTimelineTime());
+      }
       renderTimeline();
-    }
-
-    if (
-      state.pendingSeekTime === null &&
-      state.loopEnabled &&
-      state.startTime !== null &&
-      state.endTime !== null &&
-      state.endTime > state.startTime &&
-      state.currentTime >= state.endTime - LOOP_EPSILON
-    ) {
-      state.player.seekTo(state.startTime, true);
-      state.player.playVideo();
     }
   }, 50);
 }
 
+function handlePlaybackRangeBoundary(playerTime: number): boolean {
+  const range = getActivePlaybackRange();
+  const player = state.player;
+  if (
+    !range ||
+    !player ||
+    state.pendingSeekTime !== null ||
+    player.getPlayerState() !== window.YT?.PlayerState.PLAYING ||
+    playerTime < range.end - LOOP_EPSILON
+  ) {
+    return false;
+  }
+
+  if (state.loopEnabled) {
+    requestTimelineSeek(range.start, true, true);
+    player.playVideo();
+    return true;
+  }
+
+  state.playbackAllowed = false;
+  player.pauseVideo();
+  player.seekTo(range.end, true);
+  state.pendingSeekTime = null;
+  state.pendingSeekStartedAt = 0;
+  state.currentTime = range.end;
+  renderTimeline();
+  updatePlaybackButton();
+  return true;
+}
+
+function getActivePlaybackRange(): { start: number; end: number } | null {
+  if (
+    state.rangeIsDefault ||
+    state.startTime === null ||
+    state.endTime === null ||
+    state.endTime <= state.startTime
+  ) {
+    return null;
+  }
+
+  return { start: state.startTime, end: state.endTime };
+}
+
 function setMarker(kind: MarkerKind): void {
   if (!state.playerReady) {
-    setProgressLabel("먼저 영상을 불러와 주세요.");
+    setProgressLabel(t("status.loadVideoFirst"));
     return;
   }
 
@@ -588,16 +847,13 @@ function setMarker(kind: MarkerKind): void {
 
 function resetSelectionToFullVideo(): void {
   if (!applyFullVideoRange()) {
-    setProgressLabel("먼저 영상을 불러와 주세요.");
+    setProgressLabel(t("status.loadVideoFirst"));
     return;
   }
 
   state.pendingLinkRange = null;
-  state.segments = [];
-  state.nextSegmentId = 1;
-  renderSegmentList();
   renderTimeline();
-  setProgressLabel("다운로드 범위를 전체 영상으로 초기화했습니다.");
+  setProgressLabel(t("status.rangeReset"));
 }
 
 function applyFullVideoRange(): boolean {
@@ -625,7 +881,7 @@ function applyLinkTimeRange(range: LinkTimeRange | null): boolean {
 
   if (end <= start) {
     applyFullVideoRange();
-    setProgressLabel("링크 시간대가 유효하지 않아 전체 영상으로 설정했습니다.");
+    setProgressLabel(t("status.invalidLinkRange"));
     return false;
   }
 
@@ -637,14 +893,14 @@ function applyLinkTimeRange(range: LinkTimeRange | null): boolean {
   updateDownloadButtonLabel();
   renderTimeline();
 
-  if (start > 0 && state.playerReady) {
+  if (state.playerReady) {
     seekToTimelineTime(start, true);
   }
 
   setProgressLabel(
     range.end === null
-      ? "링크 시작 시간을 구간 시작점으로 적용했습니다."
-      : "링크 시간대를 구간으로 적용했습니다."
+      ? t("status.linkStartApplied")
+      : t("status.linkRangeApplied")
   );
   return true;
 }
@@ -702,20 +958,23 @@ function syncRangeDisplay(): void {
   elements.endTime.textContent =
     state.endTime === null ? "--:--.---" : formatTime(state.endTime);
   elements.resetSelectionButton.disabled = state.duration <= 0;
+  renderDownloadSegmentPlan();
 
   if (
     state.startTime !== null &&
     state.endTime !== null &&
     state.endTime > state.startTime
   ) {
-    const label = state.rangeIsDefault ? "전체 영상" : "선택 구간";
+    const label = state.rangeIsDefault
+      ? t("range.fullVideo")
+      : t("range.selected");
     elements.rangeSummary.textContent = `${label} · ${formatTime(
       state.endTime - state.startTime
     )}`;
     return;
   }
 
-  elements.rangeSummary.textContent = "구간 미지정";
+  elements.rangeSummary.textContent = t("range.unset");
 }
 
 function addSegmentFromSelection(): void {
@@ -735,7 +994,9 @@ function addSegmentFromSelection(): void {
 
   renderSegmentList();
   renderTimeline();
-  setProgressLabel(`구간 ${state.segments.length}개가 목록에 있습니다.`);
+  setProgressLabel(
+    t("status.segmentListCount", { count: state.segments.length })
+  );
 }
 
 function clearSegments(): void {
@@ -746,17 +1007,20 @@ function clearSegments(): void {
   state.segments = [];
   renderSegmentList();
   renderTimeline();
-  setProgressLabel("구간 목록을 비웠습니다.");
+  setProgressLabel(t("status.segmentListCleared"));
 }
 
 function removeSegment(segmentId: number): void {
   state.segments = state.segments.filter((segment) => segment.id !== segmentId);
   renderSegmentList();
   renderTimeline();
-  setProgressLabel(`구간 ${state.segments.length}개가 목록에 있습니다.`);
+  setProgressLabel(
+    t("status.segmentListCount", { count: state.segments.length })
+  );
 }
 
 function loadSegmentToMarkers(segment: TimelineSegment): void {
+  pauseForProgrammaticSeek();
   state.startTime = segment.start;
   state.endTime = segment.end;
   state.rangeIsDefault = false;
@@ -767,6 +1031,43 @@ function loadSegmentToMarkers(segment: TimelineSegment): void {
   } else {
     renderTimeline();
   }
+  highlightTimelineSegment(segment.id);
+}
+
+function focusCurrentSelection(): void {
+  if (
+    state.startTime === null ||
+    state.endTime === null ||
+    state.endTime <= state.startTime
+  ) {
+    return;
+  }
+  pauseForProgrammaticSeek();
+  if (state.playerReady) seekToTimelineTime(state.startTime, true);
+  state.highlightedSegmentId = null;
+  state.segmentPulseRevision += 1;
+  elements.timelineRange.classList.remove("highlighted");
+  void elements.timelineRange.offsetWidth;
+  elements.timelineRange.classList.add("highlighted");
+  renderTimeline();
+}
+
+function pauseForProgrammaticSeek(): void {
+  state.playbackAllowed = false;
+  if (
+    state.player &&
+    state.player.getPlayerState() === window.YT?.PlayerState.PLAYING
+  ) {
+    state.player.pauseVideo();
+  }
+  updatePlaybackButton();
+}
+
+function highlightTimelineSegment(segmentId: number): void {
+  state.highlightedSegmentId = segmentId;
+  state.segmentPulseRevision += 1;
+  timelineSegmentsSignature = "";
+  renderTimelineSegments();
 }
 
 function getSelectionSegment(): DownloadSegment | null {
@@ -775,12 +1076,12 @@ function getSelectionSegment(): DownloadSegment | null {
   }
 
   if (state.startTime === null || state.endTime === null) {
-    setProgressLabel("시작 지점과 끝 지점을 먼저 설정해 주세요.");
+    setProgressLabel(t("status.setRangeFirst"));
     return null;
   }
 
   if (state.endTime <= state.startTime) {
-    setProgressLabel("끝 지점은 시작 지점보다 뒤에 있어야 합니다.");
+    setProgressLabel(t("status.endAfterStart"));
     return null;
   }
 
@@ -804,65 +1105,79 @@ function getDownloadSegments(): DownloadSegment[] | null {
 
 function renderSegmentList(): void {
   const count = state.segments.length;
-  elements.segmentCount.textContent = `${count}개`;
+  elements.segmentCount.textContent = t("segments.count", { count });
   elements.clearSegmentsButton.disabled = count === 0;
   elements.segmentList.classList.toggle("empty", count === 0);
   updateDownloadButtonLabel();
+  setSegmentViewItems(
+    state.segments.map((segment, index) => ({
+      color: getSegmentColor(index, 0.78),
+      duration: formatTime(segment.end - segment.start),
+      id: segment.id,
+      title: t("segments.item", { index: index + 1 }),
+      times: `${formatTime(segment.start)} - ${formatTime(segment.end)} (${formatTime(segment.end - segment.start)})`
+    }))
+  );
+  renderDownloadSegmentPlan();
+}
 
-  if (count === 0) {
-    const emptyMessage = document.createElement("p");
-    emptyMessage.textContent = "시작/끝 지점을 설정한 뒤 구간을 추가하세요.";
-    elements.segmentList.replaceChildren(emptyMessage);
-    return;
-  }
-
-  const rows = state.segments.map((segment, index) => {
-    const row = document.createElement("div");
-    row.className = "segment-row";
-
-    const main = document.createElement("div");
-    main.className = "segment-main";
-
-    const title = document.createElement("div");
-    title.className = "segment-title";
-    title.textContent = `구간 ${index + 1}`;
-
-    const times = document.createElement("div");
-    times.className = "segment-times";
-    times.textContent = `${formatTime(segment.start)} - ${formatTime(segment.end)} (${formatTime(segment.end - segment.start)})`;
-
-    const previewButton = document.createElement("button");
-    previewButton.type = "button";
-    previewButton.textContent = "보기";
-    previewButton.addEventListener("click", () => loadSegmentToMarkers(segment));
-
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.textContent = "삭제";
-    removeButton.addEventListener("click", () => removeSegment(segment.id));
-
-    main.append(title, times);
-    row.append(main, previewButton, removeButton);
-    return row;
+function renderDownloadSegmentPlan(): void {
+  const savedItems = state.segments.map((segment, index) => ({
+    color: getSegmentColor(index, 0.78),
+    duration: formatTime(segment.end - segment.start),
+    id: `segment-${segment.id}`,
+    sourceSegmentId: segment.id,
+    times: `${formatTime(segment.start)} – ${formatTime(segment.end)}`,
+    title: t("segments.item", { index: index + 1 }),
+  }));
+  const selectionIsValid =
+    state.startTime !== null &&
+    state.endTime !== null &&
+    state.endTime > state.startTime;
+  const items =
+    savedItems.length > 0 || !selectionIsValid
+      ? savedItems
+      : [
+          {
+            color: getSegmentColor(0, 0.78),
+            duration: formatTime(state.endTime! - state.startTime!),
+            id: "current-selection",
+            sourceSegmentId: null,
+            times: `${formatTime(state.startTime!)} – ${formatTime(state.endTime!)}`,
+            title: state.rangeIsDefault
+              ? t("download.fullVideoPlan")
+              : t("download.currentSelectionPlan"),
+          },
+        ];
+  setDownloadSegmentViewItems(items, {
+    count: items.length,
+    duration: formatTime(
+      (state.segments.length > 0
+        ? state.segments
+        : selectionIsValid
+          ? [{ start: state.startTime!, end: state.endTime! }]
+          : []
+      ).reduce((total, segment) => total + segment.end - segment.start, 0),
+    ),
   });
-
-  elements.segmentList.replaceChildren(...rows);
 }
 
 function updateDownloadButtonLabel(): void {
   const count = state.segments.length;
   if (getEditingQueueItem()) {
-    elements.downloadButton.textContent = "기존 큐에 새 구간 업데이트";
+    elements.downloadButton.textContent = t("download.updateQueue");
     return;
   }
 
   if (count === 0 && state.rangeIsDefault && state.startTime !== null && state.endTime !== null) {
-    elements.downloadButton.textContent = "전체 영상 큐에 추가";
+    elements.downloadButton.textContent = t("download.addFullVideo");
     return;
   }
 
   elements.downloadButton.textContent =
-    count > 0 ? `${count}개 구간 큐에 추가` : "선택 구간 큐에 추가";
+    count > 0
+      ? t("download.addSegments", { count })
+      : t("download.addSelection");
 }
 
 function togglePlayback(): void {
@@ -872,8 +1187,19 @@ function togglePlayback(): void {
 
   const playerState = state.player.getPlayerState();
   if (playerState === window.YT?.PlayerState.PLAYING) {
+    state.playbackAllowed = false;
     state.player.pauseVideo();
   } else {
+    const range = getActivePlaybackRange();
+    const current = getCurrentTimelineTime();
+    if (
+      range &&
+      (current < range.start - LOOP_EPSILON ||
+        current >= range.end - LOOP_EPSILON)
+    ) {
+      requestTimelineSeek(range.start, true, true);
+    }
+    state.playbackAllowed = true;
     state.player.playVideo();
   }
 }
@@ -885,6 +1211,16 @@ function handlePlayerStateChange(): void {
   }
 
   state.playerReady = Boolean(state.player);
+  const activePlayer = state.player;
+  if (
+    activePlayer &&
+    activePlayer.getPlayerState() === window.YT?.PlayerState.PLAYING &&
+    !state.playbackAllowed
+  ) {
+    activePlayer.pauseVideo();
+    updatePlaybackButton();
+    return;
+  }
   updateDuration();
   updateVideoMeta();
   updatePlaybackButton();
@@ -897,7 +1233,9 @@ function updatePlaybackButton(): void {
 
   const playerState = state.player.getPlayerState();
   const playing = playerState === window.YT?.PlayerState.PLAYING;
-  elements.playPauseButton.textContent = playing ? "정지" : "재생";
+  elements.playPauseButton.textContent = playing
+    ? t("playback.pause")
+    : t("playback.play");
   updateVideoMeta();
 }
 
@@ -910,14 +1248,20 @@ function seekRelative(delta: number): void {
   seekToTimelineTime(next, true);
 }
 
+function seekByFrame(direction: -1 | 1): void {
+  seekRelative(direction / state.preferences.frameRate);
+}
+
 function seekTimelineFromPointer(event: PointerEvent, forceSeek: boolean): void {
   if (!state.playerReady || state.duration <= 0) {
     return;
   }
 
-  const rect = elements.timelineInput.getBoundingClientRect();
-  const ratio = rect.width <= 0 ? 0 : (event.clientX - rect.left) / rect.width;
-  requestTimelineSeek(ratio * state.duration, true, forceSeek);
+  seekTimelineFromSurfaceClientX(
+    event.clientX,
+    elements.timelineInput,
+    forceSeek
+  );
 }
 
 function scrubTimeline(event: Event): void {
@@ -945,8 +1289,264 @@ function finishTimelineScrub(): void {
   state.timelineInteraction = null;
 }
 
+function beginTimelinePositionDrag(event: PointerEvent): void {
+  beginTimelineSurfaceDrag(event, elements.timelineInput);
+}
+
+function beginTimelineRulerDrag(event: PointerEvent): void {
+  beginTimelineSurfaceDrag(event, elements.timelineRuler);
+}
+
+function beginTimelineSurfaceDrag(
+  event: PointerEvent,
+  surface: HTMLElement
+): void {
+  if (
+    event.button !== 0 ||
+    !state.playerReady ||
+    state.duration <= 0 ||
+    state.timelineInteraction !== null
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  state.timelineInteraction = "scrub";
+  state.isScrubbing = true;
+  const target = event.currentTarget as HTMLElement;
+  target.classList.add("dragging");
+  capturePointer(target, event.pointerId);
+
+  const move = (moveEvent: PointerEvent) => {
+    seekTimelineFromSurfaceClientX(moveEvent.clientX, surface, false);
+  };
+  const stop = (stopEvent: PointerEvent) => {
+    releasePointerCapture(target, stopEvent.pointerId);
+    target.classList.remove("dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    seekToTimelineTime(getDisplayedTimelineTime(), true);
+    state.isScrubbing = false;
+    state.timelineInteraction = null;
+  };
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  seekTimelineFromSurfaceClientX(event.clientX, surface, true);
+}
+
+function beginTimeReadoutDrag(event: PointerEvent, kind: TimeDragKind): void {
+  if (
+    event.button !== 0 ||
+    !state.playerReady ||
+    state.duration <= 0 ||
+    state.timelineInteraction !== null
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  const target = event.currentTarget as HTMLElement;
+  const initialClientX = event.clientX;
+  const initialTime = getTimeDragValue(kind);
+  const dragWidth = Math.max(1, elements.timelineShell.clientWidth);
+  const timelineSpan = getTimelineViewport().span;
+  state.timelineInteraction = "readout";
+  if (kind === "playback") {
+    state.isScrubbing = true;
+  } else {
+    state.draggingMarker = kind;
+  }
+  target.classList.add("dragging");
+  capturePointer(target, event.pointerId);
+
+  const move = (moveEvent: PointerEvent) => {
+    const delta = ((moveEvent.clientX - initialClientX) / dragWidth) * timelineSpan;
+    applyTimeDragValue(kind, initialTime + delta, false);
+  };
+  const stop = (stopEvent: PointerEvent) => {
+    releasePointerCapture(target, stopEvent.pointerId);
+    target.classList.remove("dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    applyTimeDragValue(kind, getTimeDragValue(kind), true);
+    state.isScrubbing = false;
+    state.draggingMarker = null;
+    state.timelineInteraction = null;
+  };
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+}
+
+function handleTimeDragKey(event: KeyboardEvent, kind: TimeDragKind): void {
+  if (!state.playerReady || state.duration <= 0) {
+    return;
+  }
+
+  let next: number | null = null;
+  const current = getTimeDragValue(kind);
+  const step = event.shiftKey ? 1 : 0.1;
+  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+    next = current - step;
+  } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+    next = current + step;
+  } else if (event.key === "Home") {
+    next = 0;
+  } else if (event.key === "End") {
+    next = state.duration;
+  }
+
+  if (next === null) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  applyTimeDragValue(kind, next, true);
+}
+
+function getTimeDragValue(kind: TimeDragKind): number {
+  if (kind === "playback") {
+    return getDisplayedTimelineTime();
+  }
+  return kind === "start"
+    ? state.startTime ?? getDisplayedTimelineTime()
+    : state.endTime ?? getDisplayedTimelineTime();
+}
+
+function applyTimeDragValue(
+  kind: TimeDragKind,
+  time: number,
+  forceSeek: boolean
+): void {
+  if (kind === "playback") {
+    requestTimelineSeek(time, true, forceSeek);
+    return;
+  }
+  updateMarkerTime(kind, time, forceSeek);
+}
+
+function seekTimelineFromSurfaceClientX(
+  clientX: number,
+  surface: HTMLElement,
+  forceSeek: boolean
+): void {
+  const rect = surface.getBoundingClientRect();
+  requestTimelineSeek(
+    getTimelineTimeFromClientX(clientX, rect),
+    true,
+    forceSeek
+  );
+}
+
+function handleTimelineWheel(event: WheelEvent): void {
+  if (!event.altKey || state.duration <= 0) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  const surface = event.currentTarget as HTMLElement;
+  const rect = surface.getBoundingClientRect();
+  const anchorRatio = clampRatio(
+    rect.width <= 0 ? 0.5 : (event.clientX - rect.left) / rect.width
+  );
+  zoomTimelineAtRatio(
+    event.deltaY < 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP,
+    anchorRatio
+  );
+}
+
+function zoomTimelineFromControl(factor: number): void {
+  if (state.duration <= 0) {
+    return;
+  }
+
+  const viewport = getTimelineViewport();
+  const current = getDisplayedTimelineTime();
+  const anchorRatio =
+    current >= viewport.start && current <= viewport.end
+      ? clampRatio((current - viewport.start) / viewport.span)
+      : 0.5;
+  zoomTimelineAtRatio(factor, anchorRatio);
+}
+
+function zoomTimelineAtRatio(factor: number, anchorRatio: number): void {
+  const previous = getTimelineViewport();
+  const nextZoom = Math.max(
+    TIMELINE_MIN_ZOOM,
+    Math.min(TIMELINE_MAX_ZOOM, state.timelineZoom * factor)
+  );
+  if (Math.abs(nextZoom - state.timelineZoom) < 0.0001) {
+    return;
+  }
+
+  const ratio = clampRatio(anchorRatio);
+  const anchorTime = previous.start + previous.span * ratio;
+  const nextSpan = state.duration / nextZoom;
+  state.timelineZoom = nextZoom;
+  state.timelineViewportStart = clampTimelineViewportStart(
+    anchorTime - nextSpan * ratio,
+    nextSpan
+  );
+  timelineRulerSignature = "";
+  renderTimeline();
+}
+
+function resetTimelineZoom(): void {
+  if (
+    state.timelineZoom === TIMELINE_MIN_ZOOM &&
+    state.timelineViewportStart === 0
+  ) {
+    return;
+  }
+
+  state.timelineZoom = TIMELINE_MIN_ZOOM;
+  state.timelineViewportStart = 0;
+  timelineRulerSignature = "";
+  renderTimeline();
+}
+
+function getTimelineTimeFromClientX(
+  clientX: number,
+  rect: Pick<DOMRect, "left" | "width">
+): number {
+  const ratio = clampRatio(
+    rect.width <= 0 ? 0 : (clientX - rect.left) / rect.width
+  );
+  const viewport = getTimelineViewport();
+  return clampTime(viewport.start + viewport.span * ratio);
+}
+
+function clampRatio(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function releasePointerCapture(target: HTMLElement, pointerId: number): void {
+  try {
+    target.releasePointerCapture(pointerId);
+  } catch {
+    // Pointer capture can already be gone if the drag is canceled by the OS.
+  }
+}
+
+function capturePointer(target: HTMLElement, pointerId: number): void {
+  try {
+    target.setPointerCapture(pointerId);
+  } catch {
+    // Synthetic events and an OS-level cancellation may not expose an active pointer.
+  }
+}
+
 function beginMarkerDrag(event: PointerEvent, marker: MarkerKind): void {
   if (
+    event.button !== 0 ||
     !state.playerReady ||
     state.duration <= 0 ||
     state.timelineInteraction !== null
@@ -959,21 +1559,20 @@ function beginMarkerDrag(event: PointerEvent, marker: MarkerKind): void {
   state.timelineInteraction = "marker";
   state.draggingMarker = marker;
   const target = event.currentTarget as HTMLButtonElement;
-  target.setPointerCapture(event.pointerId);
+  target.classList.add("dragging");
+  capturePointer(target, event.pointerId);
 
   const move = (moveEvent: PointerEvent) => {
     updateMarkerFromPointer(marker, moveEvent.clientX);
   };
 
   const stop = (stopEvent: PointerEvent) => {
-    try {
-      target.releasePointerCapture(stopEvent.pointerId);
-    } catch {
-      // Pointer capture can already be gone if the drag is canceled by the OS.
-    }
+    releasePointerCapture(target, stopEvent.pointerId);
+    target.classList.remove("dragging");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
+    updateMarkerTime(marker, getTimeDragValue(marker), true);
     state.draggingMarker = null;
     state.timelineInteraction = null;
   };
@@ -986,8 +1585,17 @@ function beginMarkerDrag(event: PointerEvent, marker: MarkerKind): void {
 
 function updateMarkerFromPointer(marker: MarkerKind, clientX: number): void {
   const rect = elements.timelineInput.getBoundingClientRect();
-  const ratio = rect.width <= 0 ? 0 : (clientX - rect.left) / rect.width;
-  let next = clampTime(ratio * state.duration);
+  updateMarkerTime(marker, getTimelineTimeFromClientX(clientX, rect), false);
+}
+
+function updateMarkerTime(
+  marker: MarkerKind,
+  time: number,
+  forceSeek: boolean
+): void {
+  const previous = marker === "start" ? state.startTime : state.endTime;
+  const playhead = getDisplayedTimelineTime();
+  let next = clampTime(time);
   state.rangeIsDefault = false;
   state.pendingLinkRange = null;
 
@@ -1005,19 +1613,70 @@ function updateMarkerFromPointer(marker: MarkerKind, clientX: number): void {
     elements.endTime.textContent = formatTime(next);
   }
 
-  seekToTimelineTime(next, true);
+  if (shouldMovePlayheadWithMarker(marker, previous, next, playhead)) {
+    requestTimelineSeek(next, true, forceSeek);
+  }
   syncRangeDisplay();
   renderTimeline();
 }
 
+function shouldMovePlayheadWithMarker(
+  marker: MarkerKind,
+  previous: number | null,
+  next: number,
+  playhead: number
+): boolean {
+  if (previous === null) {
+    return false;
+  }
+
+  if (Math.abs(previous - playhead) <= MARKER_PLAYHEAD_EPSILON) {
+    return true;
+  }
+
+  return marker === "start"
+    ? previous < playhead && next >= playhead
+    : previous > playhead && next <= playhead;
+}
+
 function handleShortcuts(event: KeyboardEvent): void {
+  if (document.querySelector('[role="dialog"][aria-modal="true"]')) {
+    return;
+  }
+
+  const command = event.metaKey || event.ctrlKey;
+  if (command && event.key.toLowerCase() === "l") {
+    event.preventDefault();
+    elements.urlInput.focus();
+    elements.urlInput.select();
+    return;
+  }
+
+  if (command && event.key.toLowerCase() === "t") {
+    event.preventDefault();
+    void window.ytClipper.createBrowserTab();
+    return;
+  }
+
   if (event.target instanceof HTMLInputElement) {
     return;
   }
 
   if (event.code === "Space") {
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest("button, [role='button'], [role='combobox']")
+    ) {
+      return;
+    }
     event.preventDefault();
     togglePlayback();
+    return;
+  }
+
+  if (event.key === "[" || event.key === "]") {
+    event.preventDefault();
+    seekRelative(event.key === "[" ? -0.1 : 0.1);
     return;
   }
 
@@ -1033,21 +1692,33 @@ function handleShortcuts(event: KeyboardEvent): void {
 
   if (event.key === "ArrowLeft") {
     event.preventDefault();
-    seekRelative(event.shiftKey ? -5 : -1);
+    if (event.altKey) seekByFrame(-1);
+    else
+      seekRelative(
+        event.shiftKey
+          ? -state.preferences.seekLargeSeconds
+          : -state.preferences.seekSmallSeconds,
+      );
     return;
   }
 
   if (event.key === "ArrowRight") {
     event.preventDefault();
-    seekRelative(event.shiftKey ? 5 : 1);
+    if (event.altKey) seekByFrame(1);
+    else
+      seekRelative(
+        event.shiftKey
+          ? state.preferences.seekLargeSeconds
+          : state.preferences.seekSmallSeconds,
+      );
   }
 }
 
-function downloadSection(): void {
+async function downloadSection(): Promise<void> {
   const url = elements.urlInput.value.trim();
   const videoId = extractVideoId(url);
   if (!videoId) {
-    setProgressLabel("유효한 YouTube URL을 입력해 주세요.");
+    setProgressLabel(t("status.invalidUrl"));
     return;
   }
 
@@ -1071,7 +1742,7 @@ function downloadSection(): void {
     editingItem &&
     extractVideoId(editingItem.payload.url) === videoId
   ) {
-    updateExistingQueueItem(editingItem, segments, basename, preset);
+    await updateExistingQueueItem(editingItem, segments, basename, preset);
     return;
   }
 
@@ -1084,6 +1755,7 @@ function downloadSection(): void {
     encodingPreset: elements.encodingPresetSelect.value,
     basename,
     outputDir: elements.outputDirInput.value.trim(),
+    locale: getLocale(),
     resumeKey: itemId,
     skipSegmentKeys: [],
     keepSourceCache: true
@@ -1093,12 +1765,12 @@ function downloadSection(): void {
     payload,
     title: basename,
     segmentsCount: segments.length,
-    presetName: preset.name,
-    qualityLabel: getSelectedOptionText(elements.downloadQualitySelect),
-    speedLabel: getSelectedOptionText(elements.speedLimitSelect),
+    presetName: getPresetName(preset),
+    qualityLabel: getQualityLabel(elements.downloadQualitySelect.value),
+    speedLabel: getSpeedLabel(elements.speedLimitSelect.value),
     status: "queued",
     progress: 0,
-    message: "대기 중",
+    message: t("queue.message.waiting"),
     outputPath: null,
     outputPaths: [],
     error: null,
@@ -1109,21 +1781,17 @@ function downloadSection(): void {
     editorSnapshot: captureEditorSnapshot(segments)
   };
 
-  appendQueueLog(item, "[queue] 작업이 큐에 추가됨");
-  state.downloadQueue.push(item);
   state.editingQueueItemId = item.id;
-  setProgressLabel(`큐에 추가됨: ${item.title}`);
-  renderDownloadQueue();
-  switchDownloadView("queue");
-  runDownloadQueue();
+  setProgressLabel(t("status.queueAdded", { title: item.title }));
+  applyDownloadQueueSnapshot(await window.ytClipper.enqueueDownload(item));
 }
 
-function updateExistingQueueItem(
+async function updateExistingQueueItem(
   item: DownloadQueueItem,
   selectedSegments: DownloadSegment[],
   basename: string,
   preset: OutputPreset
-): void {
+): Promise<void> {
   const existingSegments = item.payload.segments.map(normalizeSegmentKey);
   const existingKeys = new Set(existingSegments.map((segment) => segment.key));
   const addedSegments = selectedSegments
@@ -1131,7 +1799,7 @@ function updateExistingQueueItem(
     .filter((segment) => !existingKeys.has(segment.key));
 
   if (addedSegments.length === 0) {
-    setProgressLabel("기존 큐에 없는 새 구간을 먼저 추가해 주세요.");
+    setProgressLabel(t("status.addNewSegmentFirst"));
     return;
   }
 
@@ -1152,21 +1820,31 @@ function updateExistingQueueItem(
   };
   item.title = basename;
   item.segmentsCount = mergedSegments.length;
-  item.presetName = preset.name;
-  item.qualityLabel = getSelectedOptionText(elements.downloadQualitySelect);
-  item.speedLabel = getSelectedOptionText(elements.speedLimitSelect);
+  item.payload.locale = getLocale();
+  item.presetName = getPresetName(preset);
+  item.qualityLabel = getQualityLabel(elements.downloadQualitySelect.value);
+  item.speedLabel = getSpeedLabel(elements.speedLimitSelect.value);
   item.editorSnapshot = captureEditorSnapshot(mergedSegments);
   item.error = null;
 
   if (item.status === "running") {
-    item.message = `${addedSegments.length}개 구간 추가됨 · 현재 작업 후 이어서 처리`;
+    item.message = t("queue.message.addedRunning", {
+      count: addedSegments.length
+    });
   } else {
     item.status = "queued";
-    item.progress = getCompletedProgress(item);
-    item.message = `${addedSegments.length}개 새 구간 다운로드 대기`;
+    item.progress = clampProgress(
+      item.completedSegmentKeys.length / Math.max(1, mergedSegments.length)
+    );
+    item.message = t("queue.message.addedWaiting", {
+      count: addedSegments.length
+    });
   }
 
-  appendQueueLog(item, `[update] 새 구간 ${addedSegments.length}개 추가`);
+  item.log = [
+    ...item.log,
+    t("log.segmentAdded", { count: addedSegments.length })
+  ].slice(-120);
   state.segments = mergedSegments.map((segment, index) => ({
     ...segment,
     id: index + 1
@@ -1174,269 +1852,43 @@ function updateExistingQueueItem(
   state.nextSegmentId = state.segments.length + 1;
   renderSegmentList();
   renderTimeline();
-  renderDownloadQueue();
-  setProgressLabel(`기존 큐에 새 구간 ${addedSegments.length}개를 추가했습니다.`);
-  switchDownloadView("queue");
-  runDownloadQueue();
-}
-
-function handleDownloadProgress(payload: DownloadProgress): void {
-  const item = getActiveQueueItem();
-  if (item) {
-    if (payload.jobId && !item.jobId) {
-      item.jobId = payload.jobId;
-      state.activeJobId = payload.jobId;
-    }
-
-    if (payload.stage === "segment-done" && payload.segmentKey) {
-      markSegmentCompleted(item, payload.segmentKey, payload.outputPath);
-    } else if (payload.progress !== undefined) {
-      const completedWeight = item.completedSegmentKeys.length;
-      const attemptWeight = item.currentAttemptKeys.length;
-      item.progress = clampProgress(
-        (completedWeight + payload.progress * attemptWeight) /
-          Math.max(1, item.payload.segments.length)
-      );
-    }
-
-    if (payload.message) {
-      item.message = payload.message;
-      appendQueueLog(item, `[${payload.stage || "progress"}] ${payload.message}`);
-    }
-
-    if (payload.stage === "segment-done" && payload.outputPath) {
-      state.lastOutputPath = payload.outputPath;
-    }
-
-    renderDownloadQueue();
-    if (payload.stage === "segment-done") {
-      flushDownloadQueueState();
-    }
-    return;
-  }
-
-  if (payload.progress !== undefined) {
-    setProgress(payload.progress);
-  }
-
-  if (payload.message) {
-    setProgressLabel(payload.message);
-    appendLog(`[${payload.stage}] ${payload.message}`);
-  }
-}
-
-async function runDownloadQueue(): Promise<void> {
-  if (state.isQueueRunning) {
-    return;
-  }
-
-  state.isQueueRunning = true;
-
-  try {
-    while (true) {
-      const item = state.downloadQueue.find((queueItem) => queueItem.status === "queued");
-      if (!item) {
-        break;
-      }
-
-      const pendingSegments = getPendingSegments(item);
-      if (pendingSegments.length === 0) {
-        item.status = "done";
-        item.progress = 1;
-        item.message = "완료";
-        renderDownloadQueue();
-        continue;
-      }
-
-      state.activeQueueItemId = item.id;
-      state.activeJobId = null;
-      item.status = "running";
-      item.currentAttemptKeys = pendingSegments.map((segment) => segment.key);
-      item.progress = getCompletedProgress(item);
-      item.message =
-        item.completedSegmentKeys.length > 0
-          ? "중단 지점부터 다운로드 재개 중"
-          : "다운로드 시작 중";
-      item.error = null;
-      item.log = [];
-      appendQueueLog(item, "[start] 다운로드 시작");
-      renderDownloadQueue();
-
-      try {
-        const request: DownloadRequest = {
-          ...item.payload,
-          resumeKey: item.id,
-          skipSegmentKeys: [...item.completedSegmentKeys],
-          keepSourceCache: true
-        };
-        const result = await window.ytClipper.downloadSection(request);
-        if (result?.ok) {
-          const completedSegments = Array.isArray(result.completedSegments)
-            ? result.completedSegments
-            : [];
-          for (const completed of completedSegments) {
-            markSegmentCompleted(item, completed.key, completed.outputPath);
-          }
-
-          if (completedSegments.length === 0) {
-            for (const key of item.currentAttemptKeys) {
-              markSegmentCompleted(item, key);
-            }
-          }
-
-          const outputPaths = Array.isArray(result.outputPaths)
-            ? result.outputPaths.filter(Boolean)
-            : [];
-          const outputPath = result.outputPath || outputPaths[0] || null;
-
-          for (const path of outputPaths) {
-            if (!item.outputPaths.includes(path)) {
-              item.outputPaths.push(path);
-            }
-          }
-          item.outputPath = outputPath || item.outputPath;
-          const remaining = getPendingSegments(item);
-          item.status = remaining.length > 0 ? "queued" : "done";
-          item.progress = getCompletedProgress(item);
-          item.message =
-            remaining.length > 0
-              ? `새 구간 ${remaining.length}개 이어서 처리 대기`
-              : `완료: 파일 ${item.outputPaths.length}개 생성`;
-          state.lastOutputPath = item.outputPath;
-          appendQueueLog(item, `[done] ${item.message}`);
-        } else {
-          const message = result?.error || "다운로드에 실패했습니다.";
-          item.status = "error";
-          item.error = message;
-          item.message = message;
-          appendQueueLog(item, `[error] ${message}`);
-        }
-      } catch (error) {
-        const message = getErrorMessage(error) || "다운로드에 실패했습니다.";
-        item.status = "error";
-        item.error = message;
-        item.message = message;
-        appendQueueLog(item, `[error] ${message}`);
-      }
-
-      item.currentAttemptKeys = [];
-      state.activeQueueItemId = null;
-      state.activeJobId = null;
-      renderDownloadQueue();
-    }
-  } finally {
-    state.isQueueRunning = false;
-    renderDownloadQueue();
-  }
+  applyDownloadQueueSnapshot(await window.ytClipper.updateQueuedDownload(item));
+  setProgressLabel(
+    t("status.queueSegmentsAdded", { count: addedSegments.length })
+  );
 }
 
 function renderDownloadQueue(): void {
-  const runningCount = state.downloadQueue.filter((item) => item.status === "running").length;
-  const queuedCount = state.downloadQueue.filter((item) => item.status === "queued").length;
-  const activeCount = runningCount + queuedCount;
-
-  elements.queueBadge.textContent = String(activeCount);
-  elements.queueSummary.textContent =
-    runningCount > 0
-      ? `진행 중 ${runningCount}개 · 대기 ${queuedCount}개`
-      : `대기 중 ${queuedCount}개`;
-
-  elements.queueList.classList.toggle("empty", state.downloadQueue.length === 0);
-
-  if (state.downloadQueue.length === 0) {
-    const emptyMessage = document.createElement("p");
-    emptyMessage.textContent = "다운로드 작업이 없습니다.";
-    elements.queueList.replaceChildren(emptyMessage);
-    renderActiveProgress();
-    persistDownloadQueue();
-    return;
-  }
-
-  const rows = state.downloadQueue.map((item, index) => createQueueRow(item, index));
-  elements.queueList.replaceChildren(...rows);
+  setQueueViewItems(
+    state.downloadQueue.map((item) => ({
+      id: item.id,
+      title: item.title,
+      status: item.status,
+      statusLabel: getQueueStatusLabel(item.status),
+      editing: state.editingQueueItemId === item.id,
+      progress: clampProgress(item.progress),
+      meta: t("queue.meta", {
+        completed: item.completedSegmentKeys.length,
+        total: item.segmentsCount,
+        quality: getQualityLabel(item.payload.downloadQuality),
+        preset: getPresetNameById(item.payload.encodingPreset),
+        speed: getSpeedLabel(item.payload.speedLimit)
+      }),
+      message: item.message || getQueueStatusLabel(item.status),
+      outputPath: item.outputPath,
+      canPause: item.status === "queued" || item.status === "running",
+      canRemove: true,
+      canResume: item.status === "paused" || item.status === "error",
+      selected: false
+    }))
+  );
   renderActiveProgress();
-  persistDownloadQueue();
-}
-
-function createQueueRow(item: DownloadQueueItem, index: number): HTMLElement {
-  const row = document.createElement("div");
-  row.className = `queue-row ${item.status}`;
-  row.classList.toggle("editing", state.editingQueueItemId === item.id);
-  row.tabIndex = 0;
-  row.setAttribute("role", "group");
-  row.setAttribute("aria-label", `${item.title} 편집 상태 복원`);
-  row.addEventListener("click", () => restoreQueueItem(item));
-  row.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      restoreQueueItem(item);
-    }
-  });
-
-  const header = document.createElement("div");
-  header.className = "queue-row-header";
-
-  const title = document.createElement("div");
-  title.className = "queue-title";
-  title.textContent = `${index + 1}. ${item.title}`;
-
-  const status = document.createElement("span");
-  status.className = "queue-status";
-  status.textContent = getQueueStatusLabel(item.status);
-
-  const meta = document.createElement("div");
-  meta.className = "queue-meta";
-  meta.textContent = `${item.completedSegmentKeys.length}/${item.segmentsCount}구간 완료 · ${item.qualityLabel} · ${item.presetName} · ${item.speedLabel}`;
-
-  const track = document.createElement("div");
-  track.className = "queue-progress-track";
-
-  const fill = document.createElement("div");
-  fill.className = "queue-progress-fill";
-  fill.style.width = `${Math.round(clampProgress(item.progress) * 100)}%`;
-
-  const footer = document.createElement("div");
-  footer.className = "queue-row-footer";
-
-  const message = document.createElement("div");
-  message.className = "queue-message";
-  message.textContent = item.message || getQueueStatusLabel(item.status);
-
-  header.append(title, status);
-  track.append(fill);
-  footer.append(message);
-
-  const outputPath = item.outputPath;
-  if (outputPath) {
-    const openButton = document.createElement("button");
-    openButton.type = "button";
-    openButton.className = "queue-open-button";
-    openButton.textContent = "열기";
-    openButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      window.ytClipper.openOutput(outputPath);
-    });
-    footer.append(openButton);
-  }
-
-  const removeButton = document.createElement("button");
-  removeButton.type = "button";
-  removeButton.className = "queue-open-button";
-  removeButton.textContent = "삭제";
-  removeButton.disabled = item.status === "running";
-  removeButton.addEventListener("click", (event) => {
-    event.stopPropagation();
-    removeQueueItem(item.id);
-  });
-  footer.append(removeButton);
-
-  row.append(header, meta, track, footer);
-  return row;
 }
 
 function restoreQueueItem(item: DownloadQueueItem): void {
   const link = parseYouTubeLink(item.payload.url);
   if (!link.videoId) {
-    setProgressLabel("저장된 큐의 YouTube URL이 유효하지 않습니다.");
+    setProgressLabel(t("status.invalidSavedUrl"));
     return;
   }
 
@@ -1444,34 +1896,37 @@ function restoreQueueItem(item: DownloadQueueItem): void {
   elements.urlInput.value = item.payload.url;
   elements.basenameInput.value = item.payload.basename;
   elements.outputDirInput.value = item.payload.outputDir;
-  elements.downloadQualitySelect.value = item.payload.downloadQuality;
-  elements.speedLimitSelect.value = item.payload.speedLimit;
-  elements.encodingPresetSelect.value = item.payload.encodingPreset;
+  setRendererSelectValue(
+    elements.downloadQualitySelect,
+    item.payload.downloadQuality
+  );
+  setRendererSelectValue(elements.speedLimitSelect, item.payload.speedLimit);
+  setRendererSelectValue(
+    elements.encodingPresetSelect,
+    item.payload.encodingPreset
+  );
   renderEncodingPresetDetails();
 
   const snapshot = item.editorSnapshot || createSnapshotFromQueueItem(item);
   createOrLoadPlayer(link.videoId, null, snapshot);
-  switchDownloadView("setup");
   updateDownloadButtonLabel();
-  setProgressLabel(`큐 작업 복원됨: ${item.title}`);
+  setProgressLabel(t("status.queueRestored", { title: item.title }));
   renderDownloadQueue();
 }
 
-function removeQueueItem(itemId: string): void {
+async function removeQueueItem(itemId: string): Promise<void> {
   const item = state.downloadQueue.find((queueItem) => queueItem.id === itemId);
   if (!item || item.status === "running") {
     return;
   }
 
-  state.downloadQueue = state.downloadQueue.filter(
-    (queueItem) => queueItem.id !== itemId
-  );
   if (state.editingQueueItemId === itemId) {
     state.editingQueueItemId = null;
     updateDownloadButtonLabel();
   }
-  renderDownloadQueue();
-  window.ytClipper.releaseDownloadCache(item.id).catch(() => {});
+  applyDownloadQueueSnapshot(
+    await window.ytClipper.removeQueuedDownload(item.id)
+  );
 }
 
 function getEditingQueueItem(): DownloadQueueItem | null {
@@ -1497,35 +1952,6 @@ function createSegmentKey(start: number, end: number): string {
   return `${Number(start).toFixed(3)}-${Number(end).toFixed(3)}`;
 }
 
-function getPendingSegments(item: DownloadQueueItem): KeyedDownloadSegment[] {
-  const completed = new Set(item.completedSegmentKeys);
-  return item.payload.segments
-    .map(normalizeSegmentKey)
-    .filter((segment) => !completed.has(segment.key));
-}
-
-function markSegmentCompleted(
-  item: DownloadQueueItem,
-  key: string,
-  outputPath?: string
-): void {
-  if (!item.completedSegmentKeys.includes(key)) {
-    item.completedSegmentKeys.push(key);
-  }
-
-  if (outputPath && !item.outputPaths.includes(outputPath)) {
-    item.outputPaths.push(outputPath);
-    item.outputPath = outputPath;
-  }
-  item.progress = getCompletedProgress(item);
-}
-
-function getCompletedProgress(item: DownloadQueueItem): number {
-  return clampProgress(
-    item.completedSegmentKeys.length / Math.max(1, item.payload.segments.length)
-  );
-}
-
 function captureEditorSnapshot(segments: DownloadSegment[]): EditorSnapshot {
   return {
     startTime: state.startTime,
@@ -1547,193 +1973,30 @@ function createSnapshotFromQueueItem(item: DownloadQueueItem): EditorSnapshot {
 
 async function initializeDownloadQueue(): Promise<void> {
   try {
-    const serialized = await window.ytClipper.loadQueueState();
-    restorePersistedDownloadQueue(serialized);
+    applyDownloadQueueSnapshot(await window.ytClipper.getDownloadQueue());
   } catch {
-    setProgressLabel("저장된 다운로드 큐를 불러오지 못했습니다.");
-  } finally {
-    queuePersistenceReady = true;
-    renderDownloadQueue();
-    runDownloadQueue();
+    setProgressLabel(t("status.queueLoadFailed"));
   }
-}
-
-function serializeDownloadQueue(): string {
-  return JSON.stringify({
-    version: 1,
-    items: state.downloadQueue,
-    editingQueueItemId: state.editingQueueItemId
-  });
-}
-
-function persistDownloadQueue(): void {
-  if (!queuePersistenceReady || queuePersistTimer !== null) {
-    return;
-  }
-
-  queuePersistTimer = window.setTimeout(() => {
-    queuePersistTimer = null;
-    window.ytClipper.saveQueueState(serializeDownloadQueue()).catch(() => {});
-  }, 150);
-}
-
-function flushDownloadQueueState(): void {
-  if (!queuePersistenceReady) {
-    return;
-  }
-
-  if (queuePersistTimer !== null) {
-    window.clearTimeout(queuePersistTimer);
-    queuePersistTimer = null;
-  }
-  window.ytClipper.saveQueueStateSync(serializeDownloadQueue());
-}
-
-function restorePersistedDownloadQueue(serialized: string | null): void {
-  if (!serialized) {
-    return;
-  }
-
-  try {
-
-    const parsed = JSON.parse(serialized) as {
-      items?: unknown[];
-      editingQueueItemId?: unknown;
-    };
-    const items = Array.isArray(parsed.items)
-      ? parsed.items
-          .map(hydrateQueueItem)
-          .filter((item): item is DownloadQueueItem => item !== null)
-      : [];
-    state.downloadQueue = items;
-
-    state.editingQueueItemId = null;
-  } catch {
-    state.downloadQueue = [];
-    state.editingQueueItemId = null;
-  }
-}
-
-function hydrateQueueItem(value: unknown): DownloadQueueItem | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const candidate = value as Partial<DownloadQueueItem>;
-  if (
-    typeof candidate.id !== "string" ||
-    !candidate.payload ||
-    typeof candidate.payload.url !== "string" ||
-    !Array.isArray(candidate.payload.segments)
-  ) {
-    return null;
-  }
-
-  const segments = candidate.payload.segments
-    .filter(
-      (segment) =>
-        Number.isFinite(segment?.start) &&
-        Number.isFinite(segment?.end) &&
-        segment.end > segment.start
-    )
-    .map(normalizeSegmentKey);
-  if (segments.length === 0) {
-    return null;
-  }
-
-  const segmentKeys = new Set(segments.map((segment) => segment.key));
-  const completedSegmentKeys = Array.isArray(candidate.completedSegmentKeys)
-    ? candidate.completedSegmentKeys.filter(
-        (key): key is string => typeof key === "string" && segmentKeys.has(key)
-      )
-    : [];
-  const rawStatus = isQueueStatus(candidate.status) ? candidate.status : "queued";
-  const status =
-    rawStatus === "running" || rawStatus === "error" ? "queued" : rawStatus;
-  const snapshotSegments = Array.isArray(candidate.editorSnapshot?.segments)
-    ? candidate.editorSnapshot.segments.map(normalizeSegmentKey)
-    : segments;
-
-  return {
-    id: candidate.id,
-    payload: {
-      ...candidate.payload,
-      segments,
-      resumeKey: candidate.id,
-      skipSegmentKeys: completedSegmentKeys,
-      keepSourceCache: true
-    },
-    title: candidate.title || candidate.payload.basename || "다운로드 작업",
-    segmentsCount: segments.length,
-    presetName: candidate.presetName || candidate.payload.encodingPreset,
-    qualityLabel: candidate.qualityLabel || candidate.payload.downloadQuality,
-    speedLabel: candidate.speedLabel || "제한 없음",
-    status:
-      completedSegmentKeys.length === segments.length ? "done" : status,
-    progress: completedSegmentKeys.length / segments.length,
-    message:
-      rawStatus === "running" || rawStatus === "error"
-        ? "앱 재시작 후 중단 지점부터 재개 대기"
-        : candidate.message || "대기 중",
-    outputPath: candidate.outputPath || null,
-    outputPaths: Array.isArray(candidate.outputPaths)
-      ? candidate.outputPaths.filter(
-          (outputPath): outputPath is string => typeof outputPath === "string"
-        )
-      : [],
-    error: candidate.error || null,
-    jobId: null,
-    log: Array.isArray(candidate.log)
-      ? candidate.log.filter((line): line is string => typeof line === "string")
-      : [],
-    completedSegmentKeys,
-    currentAttemptKeys: [],
-    editorSnapshot: {
-      startTime: candidate.editorSnapshot?.startTime ?? segments[0].start,
-      endTime: candidate.editorSnapshot?.endTime ?? segments[0].end,
-      rangeIsDefault: candidate.editorSnapshot?.rangeIsDefault === true,
-      segments: snapshotSegments
-    }
-  };
-}
-
-function isQueueStatus(value: unknown): value is QueueStatus {
-  return ["queued", "running", "done", "error"].includes(String(value));
 }
 
 function renderActiveProgress(): void {
   const item = getActiveQueueItem() || getLastVisibleQueueItem();
 
   if (!item) {
-    setProgress(0);
-    elements.setupStatusLabel.textContent = "대기 중";
-    elements.progressLabel.textContent = "대기 중";
-    elements.logOutput.textContent = "";
-    elements.openOutputButton.classList.add("hidden");
+    elements.setupStatusLabel.textContent = t("status.idle");
     return;
   }
 
-  setProgress(item.progress);
   elements.setupStatusLabel.textContent = item.message || getQueueStatusLabel(item.status);
-  elements.progressLabel.textContent = item.message || getQueueStatusLabel(item.status);
-  elements.logOutput.textContent = item.log.join("\n");
-  elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
 
   const outputPath = item.outputPath || item.outputPaths?.[0] || null;
   if (outputPath) {
     state.lastOutputPath = outputPath;
-    elements.openOutputButton.classList.remove("hidden");
-  } else {
-    elements.openOutputButton.classList.add("hidden");
   }
 }
 
 function getActiveQueueItem(): DownloadQueueItem | null {
-  if (!state.activeQueueItemId) {
-    return null;
-  }
-
-  return state.downloadQueue.find((item) => item.id === state.activeQueueItemId) || null;
+  return state.downloadQueue.find((item) => item.status === "running") || null;
 }
 
 function getLastVisibleQueueItem(): DownloadQueueItem | null {
@@ -1746,30 +2009,39 @@ function getLastVisibleQueueItem(): DownloadQueueItem | null {
   );
 }
 
-function appendQueueLog(item: DownloadQueueItem, line: string): void {
-  item.log = [...(item.log || []), line].slice(-QUEUE_LOG_LIMIT);
-}
-
 function createQueueItemId(): string {
   return `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getSelectedOptionText(select: HTMLSelectElement): string {
-  return select.selectedOptions[0]?.textContent?.trim() || "";
+function getPresetNameById(presetId: string): string {
+  const preset = OUTPUT_PRESETS.find((candidate) => candidate.id === presetId);
+  return preset ? getPresetName(preset) : presetId;
 }
 
-function getQueueStatusLabel(status: QueueStatus): string {
+function getQualityLabel(quality: string): string {
+  return quality === "best"
+    ? t("quality.best")
+    : t("quality.max", { height: quality });
+}
+
+function getSpeedLabel(speedLimit: string): string {
+  return speedLimit ? `${speedLimit.replace("M", "")} MB/s` : t("speed.unlimited");
+}
+
+function getQueueStatusLabel(status: DownloadQueueStatus): string {
   switch (status) {
     case "queued":
-      return "대기";
+      return t("queue.status.queued");
     case "running":
-      return "진행";
+      return t("queue.status.running");
+    case "paused":
+      return t("queue.status.paused");
     case "done":
-      return "완료";
+      return t("queue.status.done");
     case "error":
-      return "실패";
+      return t("queue.status.error");
     default:
-      return "대기";
+      return t("queue.status.queued");
   }
 }
 
@@ -1780,11 +2052,6 @@ function clampProgress(value: number): number {
   }
 
   return Math.max(0, Math.min(1, numeric));
-}
-
-function setProgress(value: number): void {
-  const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
-  elements.progressFill.style.width = `${percent}%`;
 }
 
 function updateDuration(): void {
@@ -1816,6 +2083,9 @@ function updateDuration(): void {
     applyLinkTimeRange(state.pendingLinkRange);
   } else if (state.rangeIsDefault) {
     applyFullVideoRange();
+    if (state.playerReady) {
+      seekToTimelineTime(0, true);
+    }
   } else {
     syncRangeDisplay();
   }
@@ -1831,20 +2101,33 @@ function updateVideoMeta(): void {
   }
 
   state.videoTitle = title;
-  elements.videoTitle.textContent = title;
-  elements.videoInfo.classList.remove("hidden");
+  void window.ytClipper.updateBrowserTabTitle(title);
 }
 
 function renderTimeline(): void {
-  const duration = state.duration;
   const current = getDisplayedTimelineTime();
+  const viewport = getTimelineViewport();
 
   elements.currentTime.textContent = formatTime(current);
+  elements.timelineInput.min = String(viewport.start);
+  elements.timelineInput.max = String(viewport.end);
   elements.timelineInput.value = String(current);
+  syncTimeHandleAccessibility(elements.currentTime, current);
+  syncTimeHandleAccessibility(elements.currentTimeHandle, current);
+  syncTimeHandleAccessibility(elements.timelineRuler, current);
+  syncTimeHandleAccessibility(
+    elements.startTime,
+    state.startTime ?? current
+  );
+  syncTimeHandleAccessibility(
+    elements.endTime,
+    state.endTime ?? current
+  );
 
   const currentPercent = getTimelinePercent(current);
   elements.timelineFill.style.width = `${currentPercent}%`;
 
+  renderTimelineRuler(viewport);
   renderCurrentAnchor(current);
   renderMarker(elements.startMarkerHandle, state.startTime);
   renderMarker(elements.endMarkerHandle, state.endTime);
@@ -1853,15 +2136,40 @@ function renderTimeline(): void {
   renderSelectedRange();
 }
 
+function syncTimeHandleAccessibility(
+  element: HTMLElement,
+  time: number
+): void {
+  const value = clampTime(time);
+  element.setAttribute("aria-valuemin", "0");
+  element.setAttribute("aria-valuemax", String(Math.max(0, state.duration)));
+  element.setAttribute("aria-valuenow", String(value));
+  element.setAttribute("aria-valuetext", formatTime(value));
+  element.setAttribute(
+    "aria-disabled",
+    String(!state.playerReady || state.duration <= 0)
+  );
+}
+
 function renderCurrentAnchor(time: number): void {
-  if (state.duration <= 0) {
+  const visible = state.duration > 0 && isTimelineTimeVisible(time);
+  elements.timelineRulerPlayhead.classList.toggle("hidden", !visible);
+  if (!visible) {
     elements.currentTimeAnchor.classList.add("hidden");
     return;
   }
 
+  const percent = getTimelinePercent(time);
   elements.currentTimeAnchor.classList.remove("hidden");
   elements.currentTimeAnchor.classList.toggle("seeking", state.pendingSeekTime !== null);
-  elements.currentTimeAnchor.style.left = `${getTimelinePercent(time)}%`;
+  elements.currentTimeAnchor.style.setProperty(
+    "--timeline-current-position",
+    `${percent}%`
+  );
+  elements.timelineRuler.style.setProperty(
+    "--timeline-current-position",
+    `${percent}%`
+  );
 }
 
 function getDisplayedTimelineTime(): number {
@@ -1869,21 +2177,27 @@ function getDisplayedTimelineTime(): number {
 }
 
 function renderMarker(element: HTMLElement, time: number | null): void {
-  if (time === null || state.duration <= 0) {
+  if (time === null || state.duration <= 0 || !isTimelineTimeVisible(time)) {
     element.classList.add("hidden");
     return;
   }
 
   element.classList.remove("hidden");
-  element.style.left = `${getTimelinePercent(time)}%`;
+  const percent = getTimelinePercent(time);
+  element.style.left = `${percent}%`;
+  element.classList.toggle("marker-edge-start", percent <= 0);
+  element.classList.toggle("marker-edge-end", percent >= 100);
 }
 
 function renderMarkerOverlap(): void {
+  const viewport = getTimelineViewport();
   const overlap =
     state.startTime !== null &&
     state.endTime !== null &&
-    state.duration > 0 &&
-    (Math.abs(state.endTime - state.startTime) / state.duration) *
+    isTimelineTimeVisible(state.startTime) &&
+    isTimelineTimeVisible(state.endTime) &&
+    viewport.span > 0 &&
+    (Math.abs(state.endTime - state.startTime) / viewport.span) *
       elements.timelineShell.clientWidth <
       16;
 
@@ -1892,18 +2206,21 @@ function renderMarkerOverlap(): void {
 }
 
 function renderSelectedRange(): void {
+  const viewport = getTimelineViewport();
   if (
     state.startTime === null ||
     state.endTime === null ||
     state.endTime <= state.startTime ||
-    state.duration <= 0
+    state.duration <= 0 ||
+    state.endTime < viewport.start ||
+    state.startTime > viewport.end
   ) {
     elements.timelineRange.classList.add("hidden");
     return;
   }
 
-  const left = getTimelinePercent(state.startTime);
-  const right = getTimelinePercent(state.endTime);
+  const left = getTimelinePercent(Math.max(state.startTime, viewport.start));
+  const right = getTimelinePercent(Math.min(state.endTime, viewport.end));
   elements.timelineRange.classList.remove("hidden");
   elements.timelineRange.style.left = `${left}%`;
   elements.timelineRange.style.width = `${right - left}%`;
@@ -1911,30 +2228,236 @@ function renderSelectedRange(): void {
 
 function renderTimelineSegments(): void {
   if (state.duration <= 0 || state.segments.length === 0) {
-    elements.timelineSegments.replaceChildren();
+    if (timelineSegmentsSignature !== "empty") {
+      timelineSegmentsSignature = "empty";
+      setTimelineSegmentViewItems([]);
+    }
     return;
   }
 
-  const ranges = state.segments.map((segment) => {
-    const range = document.createElement("div");
-    const left = getTimelinePercent(segment.start);
-    const right = getTimelinePercent(segment.end);
-
-    range.className = "timeline-segment";
-    range.style.left = `${left}%`;
-    range.style.width = `${Math.max(0, right - left)}%`;
-    return range;
+  const viewport = getTimelineViewport();
+  const visibleSegments = state.segments
+    .map((segment, index) => ({
+      ...segment,
+      colorIndex: index,
+      visibleStart: Math.max(segment.start, viewport.start),
+      visibleEnd: Math.min(segment.end, viewport.end),
+    }))
+    .filter((segment) => segment.visibleEnd > segment.visibleStart);
+  const boundaries = [
+    ...new Set(
+      visibleSegments.flatMap((segment) => [
+        segment.visibleStart,
+        segment.visibleEnd,
+      ]),
+    ),
+  ].sort((left, right) => left - right);
+  const items = boundaries.slice(0, -1).flatMap((start, index) => {
+    const end = boundaries[index + 1];
+    if (end <= start) return [];
+    const midpoint = start + (end - start) / 2;
+    const active = visibleSegments.filter(
+      (segment) => midpoint >= segment.start && midpoint < segment.end,
+    );
+    if (active.length === 0) return [];
+    const left = getTimelinePercent(start);
+    const right = getTimelinePercent(end);
+    const activeIds = active.map((segment) => segment.id).sort((a, b) => a - b);
+    return [
+      {
+        color: getBlendedSegmentColor(
+          active.map((segment) => segment.colorIndex),
+        ),
+        highlighted:
+          state.highlightedSegmentId !== null &&
+          activeIds.includes(state.highlightedSegmentId),
+        id: `${start.toFixed(4)}-${end.toFixed(4)}-${activeIds.join("-")}`,
+        left: `${left}%`,
+        pulseRevision: state.segmentPulseRevision,
+        width: `${Math.max(0, right - left)}%`,
+      },
+    ];
   });
+  const signature = items
+    .map(
+      (item) =>
+        `${item.id}:${item.left}:${item.width}:${item.color}:${item.highlighted}:${item.pulseRevision}`,
+    )
+    .join("|");
+  if (signature !== timelineSegmentsSignature) {
+    timelineSegmentsSignature = signature;
+    setTimelineSegmentViewItems(items);
+  }
+}
 
-  elements.timelineSegments.replaceChildren(...ranges);
+function getSegmentColor(index: number, alpha: number): string {
+  const [red, green, blue] =
+    SEGMENT_COLOR_PALETTE[index % SEGMENT_COLOR_PALETTE.length];
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function getBlendedSegmentColor(indices: number[]): string {
+  const colors = indices.map(
+    (index) => SEGMENT_COLOR_PALETTE[index % SEGMENT_COLOR_PALETTE.length],
+  );
+  const [red, green, blue] = colors
+    .reduce(
+      (totals, color) => [
+        totals[0] + color[0],
+        totals[1] + color[1],
+        totals[2] + color[2],
+      ],
+      [0, 0, 0],
+    )
+    .map((total) => Math.round(total / colors.length));
+  return `rgba(${red}, ${green}, ${blue}, 0.68)`;
 }
 
 function getTimelinePercent(time: number): number {
-  if (state.duration <= 0) {
+  const viewport = getTimelineViewport();
+  if (viewport.span <= 0) {
     return 0;
   }
 
-  return Math.max(0, Math.min(100, (time / state.duration) * 100));
+  return clampRatio((time - viewport.start) / viewport.span) * 100;
+}
+
+function getTimelineViewport(): { start: number; end: number; span: number } {
+  if (state.duration <= 0) {
+    return { start: 0, end: 0, span: 0 };
+  }
+
+  const zoom = Math.max(
+    TIMELINE_MIN_ZOOM,
+    Math.min(TIMELINE_MAX_ZOOM, state.timelineZoom)
+  );
+  const span = state.duration / zoom;
+  const start = clampTimelineViewportStart(state.timelineViewportStart, span);
+  state.timelineViewportStart = start;
+  return { start, end: Math.min(state.duration, start + span), span };
+}
+
+function clampTimelineViewportStart(start: number, span: number): number {
+  return Math.max(0, Math.min(Math.max(0, state.duration - span), start));
+}
+
+function isTimelineTimeVisible(time: number): boolean {
+  const viewport = getTimelineViewport();
+  return time >= viewport.start - 0.001 && time <= viewport.end + 0.001;
+}
+
+function ensureTimelineTimeVisible(time: number): boolean {
+  if (state.duration <= 0 || state.timelineZoom <= TIMELINE_MIN_ZOOM) {
+    return false;
+  }
+
+  const viewport = getTimelineViewport();
+  if (time >= viewport.start && time <= viewport.end) {
+    return false;
+  }
+
+  state.timelineViewportStart = clampTimelineViewportStart(
+    time - viewport.span * 0.08,
+    viewport.span
+  );
+  timelineRulerSignature = "";
+  timelineSegmentsSignature = "";
+  return true;
+}
+
+function renderTimelineRuler(viewport: {
+  start: number;
+  end: number;
+  span: number;
+}): void {
+  const zoom = state.timelineZoom;
+  elements.timelineRuler.disabled = state.duration <= 0;
+  elements.timelineViewportLabel.textContent = `${formatTime(viewport.start)} – ${formatTime(viewport.end)}`;
+  elements.timelineZoomLabel.textContent = `${formatZoom(zoom)}×`;
+  elements.timelineZoomOutButton.disabled = zoom <= TIMELINE_MIN_ZOOM + 0.0001;
+  elements.timelineZoomInButton.disabled = zoom >= TIMELINE_MAX_ZOOM - 0.0001;
+  elements.timelineZoomResetButton.disabled = zoom <= TIMELINE_MIN_ZOOM + 0.0001;
+
+  if (state.duration <= 0 || viewport.span <= 0) {
+    if (timelineRulerSignature !== "empty") {
+      timelineRulerSignature = "empty";
+      setTimelineRulerViewItems([]);
+    }
+    return;
+  }
+
+  const width = Math.max(1, elements.timelineRuler.clientWidth);
+  const majorInterval = getTimelineMajorInterval(viewport.span, width);
+  const minorInterval = majorInterval / 5;
+  const signature = [
+    viewport.start.toFixed(4),
+    viewport.end.toFixed(4),
+    Math.round(width),
+    majorInterval
+  ].join(":");
+  if (signature === timelineRulerSignature) {
+    return;
+  }
+
+  timelineRulerSignature = signature;
+  const firstTick = Math.ceil((viewport.start - 0.000001) / minorInterval) * minorInterval;
+  const items: Array<{
+    id: string;
+    label: string | null;
+    left: string;
+    major: boolean;
+  }> = [];
+  for (
+    let index = 0, time = firstTick;
+    time <= viewport.end + minorInterval * 0.01 && index < 240;
+    index += 1, time += minorInterval
+  ) {
+    const major =
+      Math.abs(time / majorInterval - Math.round(time / majorInterval)) <
+      0.0001;
+    items.push({
+      id: `${index}-${time.toFixed(6)}`,
+      label: major ? formatTimelineRulerTime(time, majorInterval) : null,
+      left: `${getTimelinePercent(time)}%`,
+      major
+    });
+  }
+  setTimelineRulerViewItems(items);
+}
+
+function getTimelineMajorInterval(span: number, width: number): number {
+  const target = span / Math.max(1, width / TIMELINE_MAJOR_TICK_PIXELS);
+  const intervals = [
+    0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
+    60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400
+  ];
+  return intervals.find((interval) => interval >= target) ?? intervals[intervals.length - 1];
+}
+
+function formatTimelineRulerTime(time: number, interval: number): string {
+  if (interval < 1) {
+    const tenths = Math.round(Math.max(0, time) * 10);
+    const wholeSeconds = Math.floor(tenths / 10);
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+    const prefix = hours > 0 ? `${pad(hours)}:${pad(minutes)}` : pad(minutes);
+    return `${prefix}:${pad(seconds)}.${tenths % 10}`;
+  }
+
+  const rounded = Math.round(Math.max(0, time));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const seconds = rounded % 60;
+  return hours > 0
+    ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
+    : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function formatZoom(zoom: number): string {
+  return zoom >= 10
+    ? String(Math.round(zoom))
+    : zoom.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
 }
 
 function getCurrentTimelineTime(): number {
@@ -1984,6 +2507,7 @@ function beginPendingSeek(time: number): void {
   state.pendingSeekTime = next;
   state.pendingSeekStartedAt = performance.now();
   state.currentTime = next;
+  ensureTimelineTimeVisible(next);
   renderTimeline();
 }
 
@@ -1992,7 +2516,11 @@ function reconcilePendingSeek(playerTime: number): void {
     return;
   }
 
-  if (Math.abs(playerTime - state.pendingSeekTime) <= SEEK_SETTLE_EPSILON) {
+  const settled =
+    Math.abs(playerTime - state.pendingSeekTime) <= SEEK_SETTLE_EPSILON;
+  const timedOut =
+    performance.now() - state.pendingSeekStartedAt >= SEEK_SETTLE_TIMEOUT_MS;
+  if (settled || timedOut) {
     state.pendingSeekTime = null;
     state.pendingSeekStartedAt = 0;
     state.currentTime = playerTime;
@@ -2011,18 +2539,12 @@ function clampTime(time: number): number {
 
 function setProgressLabel(message: string): void {
   elements.setupStatusLabel.textContent = message;
-  elements.progressLabel.textContent = message;
+  elements.setupStatusLabel.title = message;
 }
 
-function clearLog(): void {
-  elements.logOutput.textContent = "";
-}
-
-function appendLog(line: string): void {
-  const current = elements.logOutput.textContent;
-  const next = `${current}${current ? "\n" : ""}${line}`.split("\n").slice(-120);
-  elements.logOutput.textContent = next.join("\n");
-  elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+function getRendererMode(): RendererViewMode {
+  const value = new URLSearchParams(window.location.search).get("view");
+  return value === "shell" || value === "queue" ? value : "editor";
 }
 
 function parseYouTubeLink(input: string): {
@@ -2185,4 +2707,10 @@ function padSeconds(value: number): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function handleRendererRequestError(error: unknown): void {
+  const message = getErrorMessage(error);
+  console.error("Renderer request failed", error);
+  setProgressLabel(message);
 }

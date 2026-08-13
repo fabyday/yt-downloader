@@ -2,6 +2,7 @@ import type { YtClipperApi } from "../Shared/types";
 
 declare global {
   interface YouTubePlayer {
+    cueVideoById(videoId: string): void;
     loadVideoById(videoId: string): void;
     getCurrentTime(): number;
     getDuration(): number;

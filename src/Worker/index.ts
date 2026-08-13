@@ -1,11 +1,6 @@
-export const WORKER_PROTOCOL_VERSION = 1;
+import { startWorker } from "./WorkerServer";
 
-export type WorkerOwnershipMode = "standalone" | "hosted";
-
-export interface WorkerLaunchOptions {
-  mode: WorkerOwnershipMode;
-  ownerPid: number;
-  pipeName: string;
-  sessionId: string;
-  stateDirectory: string;
-}
+void startWorker().catch((error) => {
+  console.error("Failed to start yt-downloader worker", error);
+  process.exitCode = 1;
+});

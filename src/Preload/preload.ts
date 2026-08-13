@@ -1,24 +1,60 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DownloadProgress, YtClipperApi } from "../Shared/types";
+import type {
+  AppPreferences,
+  BrowserTabSnapshot,
+  DownloadQueueItem,
+  YtClipperApi,
+} from "../Shared/types";
 
 const api: YtClipperApi = {
   getDependencyStatus: () => ipcRenderer.invoke("app:get-dependency-status"),
-  selectOutputDir: () => ipcRenderer.invoke("dialog:select-output-dir"),
-  downloadSection: (payload) => ipcRenderer.invoke("download:section", payload),
+  getAppInfo: () => ipcRenderer.invoke("app:get-info"),
+  checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
+  openExternalUrl: (url) => ipcRenderer.invoke("app:open-external", url),
+  selectOutputDir: (locale) =>
+    ipcRenderer.invoke("dialog:select-output-dir", locale),
+  enqueueDownload: (item) => ipcRenderer.invoke("queue:enqueue", item),
+  updateQueuedDownload: (item) => ipcRenderer.invoke("queue:update", item),
+  getDownloadQueue: () => ipcRenderer.invoke("queue:get"),
+  removeQueuedDownload: (itemId) => ipcRenderer.invoke("queue:remove", itemId),
+  removeQueuedDownloads: (itemIds) =>
+    ipcRenderer.invoke("queue:remove-many", itemIds),
+  clearDownloadQueue: () => ipcRenderer.invoke("queue:clear"),
+  pauseQueuedDownload: (itemId) => ipcRenderer.invoke("queue:pause", itemId),
+  resumeQueuedDownload: (itemId) => ipcRenderer.invoke("queue:resume", itemId),
   cancelDownload: (jobId) => ipcRenderer.invoke("download:cancel", jobId),
-  releaseDownloadCache: (resumeKey) =>
-    ipcRenderer.invoke("download:release-cache", resumeKey),
-  loadQueueState: () => ipcRenderer.invoke("queue:load-state"),
-  saveQueueState: (serialized) =>
-    ipcRenderer.invoke("queue:save-state", serialized),
-  saveQueueStateSync: (serialized) =>
-    ipcRenderer.sendSync("queue:save-state-sync", serialized),
   openOutput: (filePath) => ipcRenderer.invoke("download:open-output", filePath),
-  onDownloadProgress: (handler) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: DownloadProgress) =>
+  getBrowserTabs: () => ipcRenderer.invoke("tabs:get"),
+  createBrowserTab: () => ipcRenderer.invoke("tabs:create"),
+  activateBrowserTab: (tabId) => ipcRenderer.invoke("tabs:activate", tabId),
+  closeBrowserTab: (tabId) => ipcRenderer.invoke("tabs:close", tabId),
+  updateBrowserTabTitle: (title) =>
+    ipcRenderer.invoke("tabs:update-title", title),
+  openQueueWindow: () => ipcRenderer.invoke("window:open-queue"),
+  getPreferences: () => ipcRenderer.invoke("preference:get"),
+  updatePreferences: (preferences) =>
+    ipcRenderer.invoke("preference:update", preferences),
+  onBrowserTabsChanged: (handler) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: BrowserTabSnapshot,
+    ) => handler(payload);
+    ipcRenderer.on("tabs:changed", listener);
+    return () => ipcRenderer.off("tabs:changed", listener);
+  },
+  onDownloadQueueChanged: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: DownloadQueueItem[]) =>
       handler(payload);
-    ipcRenderer.on("download:progress", listener);
-    return () => ipcRenderer.off("download:progress", listener);
+    ipcRenderer.on("queue:changed", listener);
+    return () => ipcRenderer.off("queue:changed", listener);
+  },
+  onPreferencesChanged: (handler) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: AppPreferences,
+    ) => handler(payload);
+    ipcRenderer.on("preference:changed", listener);
+    return () => ipcRenderer.off("preference:changed", listener);
   }
 };
 

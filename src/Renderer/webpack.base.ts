@@ -15,7 +15,7 @@ const config: Configuration = {
   module: {
     rules: [
       {
-        test: /\.ts$/,
+        test: /\.tsx?$/,
         exclude: /node_modules/,
         use: {
           loader: "ts-loader",
@@ -25,7 +25,12 @@ const config: Configuration = {
     ]
   },
   resolve: {
-    extensions: [".ts", ".js"]
+    alias: {
+      motion: path.resolve(__dirname, "../../node_modules/motion"),
+      react: path.resolve(__dirname, "../../node_modules/react"),
+      "react-dom": path.resolve(__dirname, "../../node_modules/react-dom")
+    },
+    extensions: [".tsx", ".ts", ".js"]
   },
   plugins: [
     new CopyPlugin({
@@ -37,6 +42,14 @@ const config: Configuration = {
         {
           from: path.resolve(__dirname, "styles.css"),
           to: "styles.css"
+        },
+        {
+          from: require.resolve("@kawaikara/kawai-ui/styles.css"),
+          to: "kawai-ui.css"
+        },
+        {
+          from: path.resolve(__dirname, "../Shared/locales"),
+          to: "locales"
         }
       ]
     })

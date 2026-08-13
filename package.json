@@ -6,23 +6,30 @@
   "type": "commonjs",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "kawai-ui:build": "pnpm --dir ../KawaiUi build",
+    "typecheck": "pnpm run kawai-ui:build && tsc --noEmit",
     "bundle": "pnpm run bundle:prod",
-    "bundle:prod": "webpack --config src/Main/webpack.prod.ts src/Preload/webpack.prod.ts src/Renderer/webpack.prod.ts src/Worker/webpack.prod.ts",
-    "bundle:dev": "webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts",
+    "bundle:prod": "pnpm run kawai-ui:build && webpack --config src/Main/webpack.prod.ts src/Preload/webpack.prod.ts src/Renderer/webpack.prod.ts src/Worker/webpack.prod.ts",
+    "bundle:dev": "pnpm run kawai-ui:build && webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts",
     "bundle:main:prod": "webpack --config src/Main/webpack.prod.ts",
     "bundle:main:dev": "webpack --config src/Main/webpack.dev.ts",
     "bundle:preload:prod": "webpack --config src/Preload/webpack.prod.ts",
     "bundle:preload:dev": "webpack --config src/Preload/webpack.dev.ts",
-    "bundle:renderer:prod": "webpack --config src/Renderer/webpack.prod.ts",
-    "bundle:renderer:dev": "webpack --config src/Renderer/webpack.dev.ts",
+    "bundle:renderer:prod": "pnpm run kawai-ui:build && webpack --config src/Renderer/webpack.prod.ts",
+    "bundle:renderer:dev": "pnpm run kawai-ui:build && webpack --config src/Renderer/webpack.dev.ts",
     "bundle:worker:prod": "webpack --config src/Worker/webpack.prod.ts",
     "bundle:worker:dev": "webpack --config src/Worker/webpack.dev.ts",
+    "test:worker": "pnpm run bundle:worker:dev && node tests/worker-integration.cjs",
     "dev": "pnpm run bundle:dev && electron .",
     "start": "pnpm run dev",
-    "watch": "webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts --watch",
-    "build": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64",
-    "build:dir": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64 --dir"
+    "watch": "pnpm run kawai-ui:build && webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts --watch",
+    "build": "pnpm run build:win",
+    "build:win": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64",
+    "build:mac": "pnpm run typecheck && pnpm run bundle && electron-builder --mac dmg zip",
+    "build:dir": "pnpm run build:dir:win",
+    "build:dir:win": "pnpm run typecheck && pnpm run bundle && electron-builder --win --x64 --dir",
+    "build:dir:mac": "pnpm run typecheck && pnpm run bundle && electron-builder --mac --dir",
+    "release:manifest": "node generate-release-manifest.cjs"
   },
   "keywords": [
     "electron",
@@ -32,9 +39,23 @@
   ],
   "author": "",
   "license": "MIT",
+  "dependencies": {
+    "@kawaikara/kawai-ui": "link:../KawaiUi",
+    "motion": "^13.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
   "build": {
     "appId": "com.ytdownloader.app",
     "productName": "YT Section Downloader",
+    "protocols": [
+      {
+        "name": "YT Downloader URL",
+        "schemes": [
+          "yt-downloader"
+        ]
+      }
+    ],
     "directories": {
       "output": "dist"
     },
@@ -53,12 +74,21 @@
         "nsis",
         "portable"
       ]
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ]
     }
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "copy-webpack-plugin": "^13.0.1",
-    "electron": "^39.2.7",
+    "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "ts-loader": "^9.5.4",
     "ts-node": "^10.9.2",
