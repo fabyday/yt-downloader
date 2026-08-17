@@ -1,2 +1,4 @@
 allowBuilds:
   electron: true
+overrides:
+  '@kawaikara/kawai-ui': link:D:/project/KawaikaraProject/KawaiUi

@@ -4,13 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@kawaikara/kawai-ui': link:D:/project/KawaikaraProject/KawaiUi
+
 importers:
 
   .:
     dependencies:
       '@kawaikara/kawai-ui':
-        specifier: link:../KawaiUi
-        version: link:../KawaiUi
+        specifier: link:D:/project/KawaikaraProject/KawaiUi
+        version: link:D:/project/KawaikaraProject/KawaiUi
       motion:
         specifier: ^13.0.0
         version: 13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

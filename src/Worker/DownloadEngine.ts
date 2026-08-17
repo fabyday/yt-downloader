@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
@@ -209,6 +209,7 @@ export class DownloadEngine {
 
       tempDir = path.join(this.options.cacheDirectory, request.resumeKey);
       await fs.mkdir(tempDir, { recursive: true });
+      await removeLegacyFullSourceFiles(tempDir);
       const cachedCompletedSegments = await readCompletedSegments(tempDir);
       for (const completed of cachedCompletedSegments) {
         if (fsSync.existsSync(completed.outputPath)) {
@@ -247,40 +248,8 @@ export class DownloadEngine {
         };
       }
 
-      send("downloading", t(locale, "main.progress.downloadingSource"), {
-        progress: 0.05,
-      });
-      const tempTemplate = path.join(tempDir, "source.%(ext)s");
-      await runProcess(
-        this.options.ytDlpPath,
-        buildYtDlpArgs({
-          request,
-          ffmpegPath: this.options.ffmpegPath,
-          nodeRuntimePath: this.options.nodeRuntimePath,
-          tempTemplate,
-        }),
-        {
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-          job,
-          locale,
-          onLine: (line) => {
-            const percent = parseDownloadPercent(line);
-            send("downloading", line, {
-              progress: percent === null ? undefined : 0.05 + percent * 0.55,
-            });
-          },
-        },
-      );
-
-      if (job.canceled) {
-        throw new Error(t(locale, "main.error.canceled"));
-      }
-
-      const inputPath = await findDownloadedFile(tempDir, locale);
       const completedSegments: CompletedDownloadSegment[] = [];
       const segmentCount = pendingSegments.length;
-      const cutProgressStart = 0.6;
-      const cutProgressSpan = 0.38;
 
       for (const [pendingIndex, entry] of pendingSegments.entries()) {
         const { segment, index } = entry;
@@ -289,11 +258,55 @@ export class DownloadEngine {
         }
 
         const duration = segment.end - segment.start;
-        const progressStart =
-          cutProgressStart + (pendingIndex / segmentCount) * cutProgressSpan;
-        const progressSpan = cutProgressSpan / segmentCount;
+        const segmentProgressStart = pendingIndex / segmentCount;
+        const downloadProgressSpan = 0.7 / segmentCount;
+        const cutProgressStart = segmentProgressStart + downloadProgressSpan;
+        const cutProgressSpan = 0.28 / segmentCount;
         const outputPath = outputPaths[index];
         const partialOutputPath = getPartialOutputPath(outputPath);
+        const sourcePrefix = `source-${index + 1}`;
+        const tempTemplate = path.join(tempDir, `${sourcePrefix}.%(ext)s`);
+
+        send("downloading", t(locale, "main.progress.downloadingSection", {
+          current: pendingIndex + 1,
+          total: segmentCount,
+        }), {
+          progress: segmentProgressStart,
+          segmentIndex: pendingIndex + 1,
+          segmentCount,
+          segmentKey: segment.key,
+        });
+
+        await runYtDlpWithFreshUrlRetry({
+          args: buildYtDlpArgs({
+            request,
+            ffmpegPath: this.options.ffmpegPath,
+            nodeRuntimePath: this.options.nodeRuntimePath,
+            tempTemplate,
+            section: segment,
+          }),
+          command: this.options.ytDlpPath,
+          job,
+          locale,
+          onLine: (line) => {
+            const percent = parseDownloadPercent(line);
+            send("downloading", line, {
+              progress:
+                percent === null
+                  ? undefined
+                  : segmentProgressStart + percent * downloadProgressSpan,
+              segmentIndex: pendingIndex + 1,
+              segmentCount,
+              segmentKey: segment.key,
+            });
+          },
+        });
+
+        if (job.canceled) {
+          throw new Error(t(locale, "main.error.canceled"));
+        }
+
+        const inputPath = await findDownloadedFile(tempDir, locale, sourcePrefix);
 
         send(
           "cutting",
@@ -308,7 +321,7 @@ export class DownloadEngine {
                 preset: getEncodingPresetLabel(request.encodingPreset, locale),
               }),
           {
-            progress: progressStart,
+            progress: cutProgressStart,
             segmentIndex: pendingIndex + 1,
             segmentCount,
             segmentKey: segment.key,
@@ -322,7 +335,7 @@ export class DownloadEngine {
             encodingPreset: request.encodingPreset,
             inputPath,
             outputPath: partialOutputPath,
-            start: segment.start,
+            start: 0,
             duration,
           }),
           {
@@ -334,7 +347,7 @@ export class DownloadEngine {
                 progress:
                   progress === null
                     ? undefined
-                    : progressStart + progress * progressSpan,
+                    : cutProgressStart + progress * cutProgressSpan,
                 segmentIndex: pendingIndex + 1,
                 segmentCount,
                 segmentKey: segment.key,
@@ -345,6 +358,7 @@ export class DownloadEngine {
         );
 
         await fs.rename(partialOutputPath, outputPath);
+        await fs.rm(inputPath, { force: true }).catch(() => {});
         completedSegments.push({ key: segment.key, outputPath });
         await writeCompletedSegments(tempDir, [
           ...cachedCompletedSegments,
@@ -355,8 +369,7 @@ export class DownloadEngine {
           total: segmentCount,
         }), {
           progress:
-            cutProgressStart +
-            ((pendingIndex + 1) / segmentCount) * cutProgressSpan,
+            (pendingIndex + 1) / segmentCount,
           segmentIndex: pendingIndex + 1,
           segmentCount,
           segmentKey: segment.key,
@@ -393,9 +406,18 @@ export class DownloadEngine {
 function cancelJob(job: DownloadJob): void {
   job.canceled = true;
   for (const child of job.children) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+
+    if (process.platform === "win32" && child.pid) {
+      const result = spawnSync(
+        "taskkill.exe",
+        ["/PID", String(child.pid), "/T", "/F"],
+        { stdio: "ignore", windowsHide: true },
+      );
+      if (!result.error && result.status === 0) continue;
     }
+
+    child.kill("SIGTERM");
   }
 }
 
@@ -480,11 +502,13 @@ function buildYtDlpArgs({
   ffmpegPath,
   nodeRuntimePath,
   tempTemplate,
+  section,
 }: {
   request: NormalizedDownloadRequest;
   ffmpegPath: string;
   nodeRuntimePath: string;
   tempTemplate: string;
+  section: NormalizedDownloadSegment;
 }): string[] {
   const args = [
     "--ignore-config",
@@ -506,6 +530,9 @@ function buildYtDlpArgs({
     getYtDlpFormatSelector(request.downloadQuality),
     "--merge-output-format",
     "mkv",
+    "--download-sections",
+    `*${formatTimestamp(section.start)}-${formatTimestamp(section.end)}`,
+    "--force-keyframes-at-cuts",
     "-o",
     tempTemplate,
   ];
@@ -517,9 +544,14 @@ function buildYtDlpArgs({
 }
 
 function getYtDlpFormatSelector(quality: string): string {
-  return quality === "best"
-    ? "bestvideo+bestaudio/best"
-    : `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]`;
+  const heightFilter = quality === "best" ? "" : `[height<=${quality}]`;
+  const sdrFilter = "[dynamic_range=SDR]";
+  return [
+    `bestvideo${heightFilter}${sdrFilter}+bestaudio`,
+    `best${heightFilter}${sdrFilter}`,
+    `bestvideo${heightFilter}+bestaudio`,
+    `best${heightFilter}`,
+  ].join("/");
 }
 
 function buildFfmpegArgs({
@@ -631,6 +663,38 @@ function collectProcessOutput(command: string, args: string[]): Promise<string> 
   });
 }
 
+async function runYtDlpWithFreshUrlRetry({
+  args,
+  command,
+  job,
+  locale,
+  onLine,
+}: {
+  args: string[];
+  command: string;
+  job: DownloadJob;
+  locale: SupportedLocale;
+  onLine: (line: string) => void;
+}): Promise<void> {
+  const maximumAttempts = 2;
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    try {
+      await runProcess(command, args, {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        job,
+        locale,
+        onLine,
+      });
+      return;
+    } catch (error) {
+      if (job.canceled) throw error;
+      const isForbidden = /HTTP Error 403|403 Forbidden/i.test(getErrorMessage(error));
+      if (!isForbidden || attempt === maximumAttempts) throw error;
+      onLine(t(locale, "main.progress.refreshingMediaUrl"));
+    }
+  }
+}
+
 function runProcess(
   command: string,
   args: string[],
@@ -677,9 +741,12 @@ function runProcess(
 async function findDownloadedFile(
   tempDir: string,
   locale: SupportedLocale,
+  prefix: string,
 ): Promise<string> {
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sourcePattern = new RegExp(`^${escapedPrefix}\\.`);
   const candidates = (await fs.readdir(tempDir))
-    .filter((file) => /^source\./.test(file) && !/\.(part|ytdl)$/.test(file))
+    .filter((file) => sourcePattern.test(file) && !/\.(part|ytdl)$/.test(file))
     .map((file) => path.join(tempDir, file));
   if (!candidates.length) {
     throw new Error(t(locale, "main.error.tempFileMissing"));
@@ -690,6 +757,15 @@ async function findDownloadedFile(
   })));
   withStats.sort((a, b) => b.stat.size - a.stat.size);
   return withStats[0].filePath;
+}
+
+async function removeLegacyFullSourceFiles(tempDir: string): Promise<void> {
+  const files = await fs.readdir(tempDir).catch(() => []);
+  await Promise.all(
+    files
+      .filter((file) => /^source\./.test(file))
+      .map((file) => fs.rm(path.join(tempDir, file), { force: true }).catch(() => {})),
+  );
 }
 
 async function readCompletedSegments(
@@ -817,6 +893,9 @@ function isVersionAtLeast(version: string | undefined, minimum: string): boolean
 
 function getDownloadFailureMessage(error: unknown, locale: SupportedLocale): string {
   const detail = getErrorMessage(error);
+  if (/HTTP Error 403|403 Forbidden/i.test(detail)) {
+    return t(locale, "main.error.youtubeForbidden");
+  }
   if (/the page needs to be reloaded|nsig extraction failed|no supported javascript runtime|javascript challenge|challenge solver/i.test(detail)) {
     return t(locale, "main.error.youtubeExtraction");
   }

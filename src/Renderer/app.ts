@@ -1916,7 +1916,7 @@ function restoreQueueItem(item: DownloadQueueItem): void {
 
 async function removeQueueItem(itemId: string): Promise<void> {
   const item = state.downloadQueue.find((queueItem) => queueItem.id === itemId);
-  if (!item || item.status === "running") {
+  if (!item) {
     return;
   }
 

@@ -6,7 +6,7 @@
   "type": "commonjs",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "kawai-ui:build": "pnpm --dir ../KawaiUi build",
+    "kawai-ui:build": "pnpm --dir node_modules/@kawaikara/kawai-ui build",
     "typecheck": "pnpm run kawai-ui:build && tsc --noEmit",
     "bundle": "pnpm run bundle:prod",
     "bundle:prod": "pnpm run kawai-ui:build && webpack --config src/Main/webpack.prod.ts src/Preload/webpack.prod.ts src/Renderer/webpack.prod.ts src/Worker/webpack.prod.ts",
@@ -40,7 +40,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@kawaikara/kawai-ui": "link:../KawaiUi",
+    "@kawaikara/kawai-ui": "github:Kawaikara/KawaiUi#main",
     "motion": "^13.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
