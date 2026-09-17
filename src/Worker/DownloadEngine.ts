@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { normalizeLocale, type SupportedLocale } from "../Shared/locale";
 import { translate as t } from "../Shared/nodeI18n";
+import { MIN_YT_DLP_VERSION } from "../Shared/dependencies";
 import type {
   CompletedDownloadSegment,
   DependencyStatus,
@@ -16,7 +17,7 @@ import type {
   DownloadSegment,
 } from "../Shared/types";
 
-export const MIN_YT_DLP_VERSION = "2025.11.12";
+export { MIN_YT_DLP_VERSION } from "../Shared/dependencies";
 
 type BinaryName = "yt-dlp" | "ffmpeg";
 
@@ -72,6 +73,7 @@ interface DownloadEngineOptions {
   ffmpegPath: string;
   nodeRuntimePath: string;
   ytDlpPath: string;
+  resolveYtDlpPath?: () => Promise<string>;
 }
 
 type ProgressExtra = Omit<
@@ -160,7 +162,7 @@ export class DownloadEngine {
 
   async getDependencyStatuses(): Promise<DependencyStatuses> {
     const [ytDlp, ffmpeg] = await Promise.all([
-      getYtDlpStatus(this.options.ytDlpPath),
+      this.getYtDlpPath().then(getYtDlpStatus),
       getCommandVersion(this.options.ffmpegPath, ["-version"]),
     ]);
     return { ytDlp, ffmpeg };
@@ -180,6 +182,10 @@ export class DownloadEngine {
     for (const job of this.activeJobs.values()) {
       cancelJob(job);
     }
+  }
+
+  private getYtDlpPath(): Promise<string> {
+    return this.options.resolveYtDlpPath?.() ?? Promise.resolve(this.options.ytDlpPath);
   }
 
   async execute(
@@ -203,7 +209,12 @@ export class DownloadEngine {
       locale = request.locale;
       send("starting", t(locale, "main.progress.preparing"), { progress: 0 });
 
-      await assertCommandAvailable(this.options.ytDlpPath, "yt-dlp", locale);
+      if (this.options.resolveYtDlpPath) {
+        send("starting", t(locale, "main.progress.updatingYtDlp"), { progress: 0 });
+      }
+      const ytDlpPath = await this.getYtDlpPath();
+      if (job.canceled) throw new Error(t(locale, "main.error.canceled"));
+      await assertCommandAvailable(ytDlpPath, "yt-dlp", locale);
       await assertCommandAvailable(this.options.ffmpegPath, "ffmpeg", locale);
       await fs.mkdir(request.outputDir, { recursive: true });
 
@@ -285,7 +296,7 @@ export class DownloadEngine {
             tempTemplate,
             section: segment,
           }),
-          command: this.options.ytDlpPath,
+          command: ytDlpPath,
           job,
           locale,
           onLine: (line) => {

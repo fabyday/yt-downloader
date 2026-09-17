@@ -10,6 +10,7 @@ async function main() {
   const projectRoot = path.resolve(__dirname, "..");
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "yt-worker-test-"));
   const sessionId = crypto.randomUUID();
+  const ownership = process.argv.includes("--app-owned") ? "app-owned" : "external-owned";
   const token = crypto.randomBytes(24).toString("hex");
   const endpoint = process.platform === "win32"
     ? `\\\\.\\pipe\\yt-worker-test-${sessionId}`
@@ -19,7 +20,7 @@ async function main() {
   const workerPath = path.join(projectRoot, "build", "worker", "worker.js");
   const child = spawn(process.execPath, [
     workerPath,
-    "--ownership", "external-owned",
+    "--ownership", ownership,
     "--endpoint", endpoint,
     "--session-id", sessionId,
     "--state-dir", path.join(tempRoot, "state"),
@@ -46,7 +47,7 @@ async function main() {
       token,
     });
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.ownership, "external-owned");
+    assert.equal(hello.ownership, ownership);
     assert.equal(hello.sessionId, sessionId);
 
     const dependencies = await client.request("dependency.get", {});

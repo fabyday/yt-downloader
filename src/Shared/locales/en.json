@@ -216,6 +216,7 @@
   "main.progress.downloadingSource": "Downloading the source video to a temporary file.",
   "main.progress.downloadingSection": "Downloading selected section {current}/{total}.",
   "main.progress.refreshingMediaUrl": "YouTube rejected the media URL; retrying with a freshly extracted URL.",
+  "main.progress.updatingYtDlp": "Checking and preparing the latest yt-dlp version.",
   "main.progress.cuttingCopy": "Cutting section {current}/{total} while keeping the source streams.",
   "main.progress.cuttingEncode": "Encoding section {current}/{total} with the {preset} preset.",
   "main.progress.segmentDone": "Saved section {current}/{total}.",

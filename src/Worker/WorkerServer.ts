@@ -16,6 +16,7 @@ import {
 } from "../Shared/workerProtocol";
 import { DownloadEngine, sanitizeResumeKey } from "./DownloadEngine";
 import { DownloadQueueService } from "./DownloadQueueService";
+import { prepareYtDlpOnStartup } from "./YtDlpUpdater";
 
 interface ClientSession {
   authenticated: boolean;
@@ -30,11 +31,21 @@ export async function startWorker(): Promise<void> {
   await fs.mkdir(options.stateDirectory, { recursive: true });
   await fs.mkdir(options.cacheDirectory, { recursive: true });
 
+  const updateController = new AbortController();
+  const ytDlpUpdate = options.ownership === "app-owned" && !process.env.YT_DLP_PATH?.trim()
+    ? prepareYtDlpOnStartup({
+        directory: path.join(options.stateDirectory, "binaries", "yt-dlp"),
+        fallbackPath: options.ytDlpPath,
+        signal: updateController.signal,
+      })
+    : undefined;
+
   const engine = new DownloadEngine({
     cacheDirectory: options.cacheDirectory,
     ffmpegPath: options.ffmpegPath,
     nodeRuntimePath: options.nodeRuntimePath,
     ytDlpPath: options.ytDlpPath,
+    resolveYtDlpPath: ytDlpUpdate?.getPath,
   });
   const clients = new Set<ClientSession>();
   let stateRevision = 0;
@@ -91,9 +102,11 @@ export async function startWorker(): Promise<void> {
   const shutdown = (): Promise<void> => {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
+      updateController.abort();
       engine.cancelAll();
       for (const client of clients) client.socket.end();
       await queue.shutdown();
+      await ytDlpUpdate?.finished;
       await new Promise<void>((resolve) => server.close(() => resolve()));
       if (process.platform !== "win32") {
         await removeOwnedSocket(options.endpoint);

@@ -216,6 +216,7 @@
   "main.progress.downloadingSource": "元動画を一時ファイルにダウンロードしています。",
   "main.progress.downloadingSection": "選択区間 {current}/{total} をダウンロードしています。",
   "main.progress.refreshingMediaUrl": "YouTubeにメディアURLを拒否されたため、新しいURLで再試行します。",
+  "main.progress.updatingYtDlp": "yt-dlpの最新バージョンを確認して準備しています。",
   "main.progress.cuttingCopy": "{current}/{total}区間を元ストリーム維持方式で切り出しています。",
   "main.progress.cuttingEncode": "{current}/{total}区間を{preset}プリセットでエンコードしています。",
   "main.progress.segmentDone": "{current}/{total}区間の保存が完了しました。",

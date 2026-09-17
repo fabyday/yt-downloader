@@ -216,6 +216,7 @@
   "main.progress.downloadingSource": "원본 영상을 임시 파일로 다운로드하는 중입니다.",
   "main.progress.downloadingSection": "선택 구간 {current}/{total}을 다운로드하는 중입니다.",
   "main.progress.refreshingMediaUrl": "YouTube 미디어 주소가 거부되어 새 주소로 다시 시도합니다.",
+  "main.progress.updatingYtDlp": "yt-dlp 최신 버전을 확인하고 준비하는 중입니다.",
   "main.progress.cuttingCopy": "{current}/{total} 구간을 원본 스트림 유지 방식으로 자르는 중입니다.",
   "main.progress.cuttingEncode": "{current}/{total} 구간을 {preset} 프리셋으로 인코딩하는 중입니다.",
   "main.progress.segmentDone": "{current}/{total} 구간 저장이 끝났습니다.",

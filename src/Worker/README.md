@@ -30,6 +30,13 @@
 
 Downloader가 직접 실행한 Worker는 `app-owned`입니다. Downloader PID를 감시하고
 소유 앱이 종료되면 Worker도 종료합니다.
+macOS/Windows의 `app-owned` Worker는 시작할 때 공식 yt-dlp 안정판을 비동기로
+확인하고 `state-dir/binaries/yt-dlp`에 검증한 버전을 설치합니다. 소켓 서버와 UI는
+즉시 시작됩니다. 정상 캐시/번들이 있으면 바로 사용하고, 업데이트가 끝나면 이후 작업부터
+새 버전을 씁니다. 정상 바이너리가 없을 때만 `dependency.get`과 다운로드가 업데이트를 기다립니다.
+업데이트 실패 시 정상 캐시/번들 버전으로 복구하고, 종료 시 진행 중인 업데이트를 취소합니다.
+`YT_DLP_PATH`가 설정돼 있거나 Worker가 `external-owned`이면 호스트가 지정한 바이너리를
+그대로 사용합니다. 최초 설치 시 `dependency.get`의 클라이언트 타임아웃은 615초 이상을 권장합니다.
 
 Kawaikara 같은 외부 호스트는 Worker를 `external-owned`로 실행할 수 있습니다.
 이때 Downloader는 아래 환경변수로 기존 Worker에 연결하며, 종료할 때 Worker를

@@ -7,6 +7,7 @@ import {
 } from "../../Common/RetCode";
 import { normalizeLocale } from "../../Shared/locale";
 import { translate as t } from "../../Shared/nodeI18n";
+import { YT_DLP_UPDATE_TIMEOUT_MS } from "../../Shared/dependencies";
 import type { DownloadQueueItem } from "../../Shared/types";
 import type { AppPreferences } from "../../Shared/types";
 import { BaseManager } from "./BaseManager";
@@ -96,7 +97,7 @@ export class IPCManager extends BaseManager<IpcReturnType> {
 
   private registerHandlers(): void {
     ipcMain.handle("app:get-dependency-status", () =>
-      this.workerManager.getClient().request("dependency.get", {}),
+      this.workerManager.getClient().request("dependency.get", {}, YT_DLP_UPDATE_TIMEOUT_MS + 15_000),
     );
     ipcMain.handle("app:get-info", () => ({
       arch: process.arch,
