@@ -1,3 +1,5 @@
+export { isSupportedYouTubeUrl } from "../Shared/YouTubeSource";
+
 export const YT_DOWNLOADER_PROTOCOL = "yt-downloader";
 
 export function createDownloaderDeepLink(sourceUrl: string): string {
@@ -17,7 +19,9 @@ export function getSourceUrlFromDeepLink(value: string): string | null {
     }
 
     const sourceUrl = deepLink.searchParams.get("url");
-    return sourceUrl && isSupportedYouTubeUrl(sourceUrl) ? sourceUrl : null;
+    return sourceUrl && sourceUrl.length <= 16_384 && !sourceUrl.includes("\0")
+      ? sourceUrl
+      : null;
   } catch {
     return null;
   }
@@ -28,19 +32,4 @@ export function findDownloaderDeepLink(values: readonly string[]): string | null
     values.find((value) => value.startsWith(`${YT_DOWNLOADER_PROTOCOL}://`)) ??
     null
   );
-}
-
-function isSupportedYouTubeUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-    return (
-      url.protocol === "https:" &&
-      (hostname === "youtube.com" ||
-        hostname.endsWith(".youtube.com") ||
-        hostname === "youtu.be")
-    );
-  } catch {
-    return false;
-  }
 }

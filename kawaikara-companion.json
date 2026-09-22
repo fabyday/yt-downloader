@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "id": "com.ytdownloader.app",
+  "name": "YT Section Downloader",
+  "transport": {
+    "type": "url-scheme",
+    "scheme": "yt-downloader",
+    "action": "open"
+  },
+  "capabilities": [
+    {
+      "id": "media.download",
+      "version": 1,
+      "features": [
+        "video",
+        "time-range",
+        "quality-selection",
+        "format-selection"
+      ],
+      "scopes": [
+        {
+          "service": "youtube",
+          "urls": [
+            {
+              "hostname": "youtube.com",
+              "paths": [
+                { "kind": "exact", "value": "/watch", "requiredQueryParameters": ["v"] },
+                { "kind": "prefix", "value": "/embed/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/shorts/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/live/", "minimumPathSegments": 2 }
+              ]
+            },
+            {
+              "hostname": "www.youtube.com",
+              "paths": [
+                { "kind": "exact", "value": "/watch", "requiredQueryParameters": ["v"] },
+                { "kind": "prefix", "value": "/embed/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/shorts/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/live/", "minimumPathSegments": 2 }
+              ]
+            },
+            {
+              "hostname": "m.youtube.com",
+              "paths": [
+                { "kind": "exact", "value": "/watch", "requiredQueryParameters": ["v"] },
+                { "kind": "prefix", "value": "/embed/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/shorts/", "minimumPathSegments": 2 },
+                { "kind": "prefix", "value": "/live/", "minimumPathSegments": 2 }
+              ]
+            },
+            {
+              "hostname": "music.youtube.com",
+              "paths": [
+                { "kind": "exact", "value": "/watch", "requiredQueryParameters": ["v"] }
+              ]
+            },
+            {
+              "hostname": "youtu.be",
+              "paths": [
+                { "kind": "prefix", "value": "/", "minimumPathSegments": 1 }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "id": "resource.url",
+      "required": true
+    }
+  ]
+}

@@ -20,6 +20,7 @@
     "bundle:worker:prod": "webpack --config src/Worker/webpack.prod.ts",
     "bundle:worker:dev": "webpack --config src/Worker/webpack.dev.ts",
     "test:worker": "pnpm run bundle:worker:dev && node tests/worker-integration.cjs",
+    "test:protocol": "node --require ts-node/register/transpile-only --test tests/external-protocol.test.cjs",
     "test:updater": "node --require ts-node/register/transpile-only --test tests/yt-dlp-updater.test.cjs",
     "dev": "pnpm run bundle:dev && electron .",
     "start": "pnpm run dev",
@@ -68,6 +69,10 @@
       {
         "from": "thirdparty/bin",
         "to": "thirdparty/bin"
+      },
+      {
+        "from": "kawaikara-companion.json",
+        "to": "kawaikara-companion.json"
       }
     ],
     "win": {

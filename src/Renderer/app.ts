@@ -9,6 +9,7 @@ import type {
   EditorSnapshot,
   RendererViewMode
 } from "../Shared/types";
+import { isSupportedYouTubeUrl } from "../Shared/YouTubeSource";
 import {
   DEFAULT_APP_PREFERENCES,
   normalizeAppPreferences,
@@ -2551,6 +2552,9 @@ function parseYouTubeLink(input: string): {
   videoId: string | null;
   timeRange: LinkTimeRange | null;
 } {
+  if (!isSupportedYouTubeUrl(input.trim())) {
+    return { videoId: null, timeRange: null };
+  }
   try {
     const url = new URL(input.trim());
     return {

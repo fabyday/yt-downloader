@@ -38,7 +38,10 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
   }
 
   openExternalUrl(value: string): void {
-    if (this.windowManager?.openExternalUrl(value)) return;
+    if (this.windowManager) {
+      this.windowManager.openExternalUrl(value);
+      return;
+    }
     this.pendingExternalUrls.push(value);
   }
 
