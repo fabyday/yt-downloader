@@ -74,6 +74,7 @@ interface DownloadEngineOptions {
   nodeRuntimePath: string;
   ytDlpPath: string;
   resolveYtDlpPath?: () => Promise<string>;
+  createCookieSnapshot?: () => Promise<{ path: string; dispose: () => Promise<void> } | null>;
 }
 
 type ProgressExtra = Omit<
@@ -201,6 +202,7 @@ export class DownloadEngine {
     };
 
     let tempDir: string | null = null;
+    let cookieSnapshot: { path: string; dispose: () => Promise<void> } | null = null;
     let removeTempOnFinish = false;
     let locale = normalizeLocale(payload.locale);
 
@@ -216,6 +218,7 @@ export class DownloadEngine {
       if (job.canceled) throw new Error(t(locale, "main.error.canceled"));
       await assertCommandAvailable(ytDlpPath, "yt-dlp", locale);
       await assertCommandAvailable(this.options.ffmpegPath, "ffmpeg", locale);
+      cookieSnapshot = await this.options.createCookieSnapshot?.() ?? null;
       await fs.mkdir(request.outputDir, { recursive: true });
 
       tempDir = path.join(this.options.cacheDirectory, request.resumeKey);
@@ -295,6 +298,7 @@ export class DownloadEngine {
             nodeRuntimePath: this.options.nodeRuntimePath,
             tempTemplate,
             section: segment,
+            cookiePath: cookieSnapshot?.path,
           }),
           command: ytDlpPath,
           job,
@@ -406,6 +410,7 @@ export class DownloadEngine {
       send("error", message, { progress: 0 });
       return { ok: false, jobId, error: message };
     } finally {
+      await cookieSnapshot?.dispose().catch(() => {});
       if (tempDir && removeTempOnFinish) {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
       }
@@ -514,12 +519,14 @@ function buildYtDlpArgs({
   nodeRuntimePath,
   tempTemplate,
   section,
+  cookiePath,
 }: {
   request: NormalizedDownloadRequest;
   ffmpegPath: string;
   nodeRuntimePath: string;
   tempTemplate: string;
   section: NormalizedDownloadSegment;
+  cookiePath?: string;
 }): string[] {
   const args = [
     "--ignore-config",
@@ -550,6 +557,7 @@ function buildYtDlpArgs({
   if (request.speedLimit) {
     args.push("--limit-rate", request.speedLimit);
   }
+  if (cookiePath) args.push("--cookies", cookiePath);
   args.push(request.url);
   return args;
 }
@@ -904,6 +912,7 @@ function isVersionAtLeast(version: string | undefined, minimum: string): boolean
 
 function getDownloadFailureMessage(error: unknown, locale: SupportedLocale): string {
   const detail = getErrorMessage(error);
+  if (detail === "cookies.readFailed") return t(locale, detail);
   if (/HTTP Error 403|403 Forbidden/i.test(detail)) {
     return t(locale, "main.error.youtubeForbidden");
   }

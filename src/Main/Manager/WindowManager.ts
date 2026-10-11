@@ -1,5 +1,7 @@
 import {
+  app,
   BrowserWindow,
+  Menu,
   screen,
   WebContentsView,
   type WebContents,
@@ -12,10 +14,14 @@ import {
 } from "../../Common/RetCode";
 import type { BrowserTabSnapshot } from "../../Shared/types";
 import { getSourceUrlFromDeepLink } from "../ExternalProtocol";
+import {
+  getWindowChromeOptions,
+  installMacWindowShortcuts,
+  SHELL_CHROME_HEIGHT,
+} from "../WindowChrome";
 import { BaseManager } from "./BaseManager";
 import { WindowReturnType } from "./ReturnTypes";
 
-const TAB_STRIP_HEIGHT = 48;
 const MAX_TABS = 12;
 
 interface ManagedTab {
@@ -45,6 +51,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     }
 
     try {
+      Menu.setApplicationMenu(null);
       this.createMainWindow();
       this.createTab();
       this.initialized = true;
@@ -125,6 +132,11 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     view.setBackgroundColor("#111317");
     view.setVisible(false);
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    installMacWindowShortcuts(
+      view.webContents,
+      () => mainWindow.close(),
+      () => app.quit(),
+    );
     view.webContents.on("destroyed", () => {
       if (this.tabs.get(id)?.view !== view) return;
       this.tabs.delete(id);
@@ -234,6 +246,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     const width = Math.min(1180, display.workAreaSize.width);
     const height = Math.min(780, display.workAreaSize.height);
     const queueWindow = new BrowserWindow({
+      ...getWindowChromeOptions(),
       backgroundColor: "#111317",
       center: true,
       height,
@@ -245,6 +258,12 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       width,
     });
     this.queueWindow = queueWindow;
+    queueWindow.setMenu(null);
+    installMacWindowShortcuts(
+      queueWindow.webContents,
+      () => queueWindow.close(),
+      () => app.quit(),
+    );
     queueWindow.once("ready-to-show", () => queueWindow.show());
     queueWindow.on("closed", () => {
       if (this.queueWindow === queueWindow) this.queueWindow = null;
@@ -274,6 +293,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     const width = Math.min(1440, workArea.width);
     const height = Math.min(900, workArea.height);
     const mainWindow = new BrowserWindow({
+      ...getWindowChromeOptions(),
       backgroundColor: "#111317",
       center: true,
       height,
@@ -284,7 +304,22 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       width,
     });
     this.mainWindow = mainWindow;
-    mainWindow.on("resize", () => this.layoutTabViews());
+    mainWindow.setMenu(null);
+    installMacWindowShortcuts(
+      mainWindow.webContents,
+      () => mainWindow.close(),
+      () => app.quit(),
+    );
+    const updateLayout = () => {
+      this.layoutTabViews();
+      // Native frame insets can settle after the Windows maximize/resize event.
+      setImmediate(() => this.layoutTabViews());
+    };
+    mainWindow.on("resize", updateLayout);
+    mainWindow.on("maximize", updateLayout);
+    mainWindow.on("unmaximize", updateLayout);
+    mainWindow.on("enter-full-screen", updateLayout);
+    mainWindow.on("leave-full-screen", updateLayout);
     mainWindow.on("closed", () => this.handleMainWindowClosed(mainWindow));
     mainWindow.webContents.on("did-finish-load", () => this.emitTabsChanged());
     void mainWindow.loadURL(this.createRendererUrl("shell"));
@@ -306,6 +341,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
   ): string {
     const url = new URL(this.rendererUrl);
     url.searchParams.set("view", view);
+    url.searchParams.set("platform", process.platform);
     for (const [key, value] of Object.entries(values)) {
       url.searchParams.set(key, value);
     }
@@ -338,9 +374,9 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     const [width, height] = mainWindow.getContentSize();
     const bounds = {
       x: 0,
-      y: TAB_STRIP_HEIGHT,
+      y: SHELL_CHROME_HEIGHT,
       width: Math.max(1, width),
-      height: Math.max(1, height - TAB_STRIP_HEIGHT),
+      height: Math.max(1, height - SHELL_CHROME_HEIGHT),
     };
     for (const tab of this.tabs.values()) {
       tab.view.setBounds(bounds);

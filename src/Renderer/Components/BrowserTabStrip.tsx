@@ -96,9 +96,6 @@ export function BrowserTabStrip() {
         +
       </Button>
       <Box className="browser-tab-strip-spacer" />
-      <Text size="xs" weight="semibold" className="browser-shell-brand">
-        YT SECTION DOWNLOADER
-      </Text>
     </Flex>
   );
 }

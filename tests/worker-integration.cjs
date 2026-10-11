@@ -49,6 +49,15 @@ async function main() {
     assert.equal(hello.protocolVersion, 1);
     assert.equal(hello.ownership, ownership);
     assert.equal(hello.sessionId, sessionId);
+    assert.deepEqual(await client.request("cookies.status", {}), { configured: false, count: 0 });
+    await assert.rejects(client.request("cookies.import-browser", { browser: "unsupported" }), /cookies.invalidBrowser/);
+    assert.deepEqual(await client.request("cookies.import", {
+      contents: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttest-only\n',
+    }), { configured: true, count: 1 });
+    assert.deepEqual(await client.request("cookies.clear", {}), { configured: false, count: 0 });
+    const updateStatus = await client.request("dependency.update-status", {});
+    assert.equal(typeof updateStatus.status, 'string');
+    if (ownership === 'external-owned') assert.equal(updateStatus.status, 'managed');
 
     const dependencies = await client.request("dependency.get", {});
     assert.equal(dependencies.ytDlp.available, true);

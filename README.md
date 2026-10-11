@@ -29,6 +29,17 @@ Renderer UI는 React와 로컬 `../KawaiUi` 패키지를 사용합니다. KawaiU
 - 복원한 큐에 새 구간만 추가하고 완료 구간은 중복 다운로드에서 제외
 - 앱 종료 시 큐와 구간별 완료 상태를 저장하고 yt-dlp 부분 파일부터 자동 재개
 - 앱 실행마다 공식 최신 안정판 yt-dlp 확인 및 자동 업데이트
+- 메인·큐 창 공통 커스텀 타이틀바와 메뉴 제거 (Windows 오른쪽 창 버튼, macOS 왼쪽 신호등 버튼)
+
+### 창 타이틀바
+
+앱이 상단 브랜드·드래그 영역을 그리고, 창 버튼은 Electron 네이티브 오버레이를 사용합니다.
+Windows의 최소화·최대화·닫기와 macOS의 신호등 버튼을 OS 배치 그대로 유지합니다.
+macOS에서 메뉴 없이도 `⌘A/C/V/X/Z`, `⇧⌘Z`, `⌘W/Q` 단축키를 사용할 수 있습니다.
+타이틀바·탭 높이를 변경할 때는 `src/Main/WindowChrome.ts`와 `src/Renderer/styles.css`를
+함께 수정하세요. `pnpm test:windows`로 설정·단축키·편집 영역 배치를 검사할 수 있습니다.
+번들 생성 후 `pnpm exec electron tests/window-chrome-smoke.cjs`는 모의 데이터로 실제 창을
+열어 배치·최대화·최소화·큐 닫기를 검사합니다. 쿠키나 다운로드 Worker는 사용하지 않습니다.
 
 ## 준비
 
@@ -55,6 +66,36 @@ YT_DLP_PATH=/path/to/yt-dlp FFMPEG_PATH=/path/to/ffmpeg pnpm dev
 ```
 
 ## 실행
+
+### YouTube 쿠키 설정
+
+설정 → 일반 → **YouTube 쿠키**에서 로그인한 브라우저를 선택하고 **쿠키 받아오기**를
+누릅니다. 프로필은 비워두면 yt-dlp가 자동 선택하며, 다른 계정은 `Default`, `Profile 1`
+같은 프로필 이름으로 지정할 수 있습니다. Chrome, Edge, Firefox, Brave, Chromium,
+Opera, Vivaldi 및 macOS Safari를 지원합니다. 설치·로그인된 브라우저를 선택해야 합니다.
+DB 잠금 오류가 나면 브라우저를 완전히 종료하고 재시도하세요. Windows 브라우저 암호화로
+직접 추출이 막히면 Firefox 또는 **파일에서 가져오기**로 Netscape 형식의 `cookies.txt`
+(1MB 이하)를 사용할 수 있습니다. [쿠키 내보내기 안내](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies).
+직접 추출은 yt-dlp가 브라우저 전체 쿠키를 임시 파일로 내보낸 뒤 필요한 도메인만 필터링합니다.
+임시 전체 쿠키 파일은 성공·실패 시 모두 정리하며 원본 브라우저 쿠키는 변경하지 않습니다.
+YouTube·Google 관련 유효한 쿠키만 Worker 사용자 데이터 폴더에 로컬 파일로 저장합니다.
+쿠키는 로그인 정보이므로 공유하거나 Git에 추가하지 마세요.
+
+가져오기와 **쿠키 삭제**는 즉시 저장됩니다. 이후 시작하거나 재시도하는 다운로드에
+적용되며 실행 중인 작업은 기존 쿠키 사본을 사용합니다. 작업 종료 시 사본을 제거합니다.
+파일을 가져왔다고 로그인 성공이 보장되지는 않으며, 인증 만료 시 다시 가져와야 합니다.
+이 설정은 yt-dlp 다운로드용이며 YouTube IFrame 미리보기 로그인은 변경하지 않습니다.
+쿠키로 모든 HTTP 403 또는 PO Token 오류가 해결되지는 않습니다.
+
+설정 → 앱 정보에서 yt-dlp 시작 시 자동 업데이트의 확인·다운로드·완료·실패 상태를 볼 수 있습니다.
+
+쿠키 형식 검증, 저장·교체·삭제 및 다운로드 인자 전달 테스트:
+
+```sh
+pnpm test:cookies
+```
+
+### 개발 앱 실행
 
 ```sh
 pnpm dev

@@ -7,6 +7,7 @@ import {
   Text,
 } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
+import { WindowTitleBar } from "../Components/WindowTitleBar";
 import { DownloadQueueView } from "./DownloadQueueView";
 
 export function QueueWindowView() {
@@ -20,6 +21,7 @@ export function QueueWindowView() {
         surface="background"
         className="queue-window-shell kawai-theme-dark downloader-theme"
       >
+        <WindowTitleBar title={t("queue.windowTitle")} />
         <Panel padding="md" radius="lg" className="queue-window-panel">
           <Box as="header" className="queue-window-header">
             <Box className="queue-window-heading-row">

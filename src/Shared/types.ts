@@ -1,4 +1,5 @@
 import type { SupportedLocale } from "./locale";
+import type { BrowserCookieOptions } from "./cookies";
 
 export interface DownloadSegment {
   start: number;
@@ -103,6 +104,16 @@ export interface DependencyStatuses {
   ffmpeg: DependencyStatus;
 }
 
+export interface CookieStatus {
+  configured: boolean;
+  count: number;
+}
+
+export interface YtDlpUpdateStatus {
+  status: "checking" | "downloading" | "current" | "updated" | "error" | "managed";
+  version: string | null;
+}
+
 export type RendererViewMode = "shell" | "editor" | "queue";
 
 export interface BrowserTabState {
@@ -138,6 +149,11 @@ export interface DownloadResult {
 }
 
 export interface YtClipperApi {
+  getCookieStatus(): Promise<CookieStatus>;
+  importCookies(): Promise<CookieStatus | null>;
+  importBrowserCookies(options: BrowserCookieOptions): Promise<CookieStatus>;
+  clearCookies(): Promise<CookieStatus>;
+  getYtDlpUpdateStatus(): Promise<YtDlpUpdateStatus>;
   getDependencyStatus(): Promise<DependencyStatuses>;
   selectOutputDir(locale?: SupportedLocale): Promise<string | null>;
   enqueueDownload(item: DownloadQueueItem): Promise<DownloadQueueItem[]>;

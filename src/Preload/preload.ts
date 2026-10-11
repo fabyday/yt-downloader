@@ -7,6 +7,11 @@ import type {
 } from "../Shared/types";
 
 const api: YtClipperApi = {
+  getCookieStatus: () => ipcRenderer.invoke("cookies:status"),
+  importCookies: () => ipcRenderer.invoke("cookies:import"),
+  importBrowserCookies: (options) => ipcRenderer.invoke("cookies:import-browser", options),
+  clearCookies: () => ipcRenderer.invoke("cookies:clear"),
+  getYtDlpUpdateStatus: () => ipcRenderer.invoke("app:yt-dlp-update-status"),
   getDependencyStatus: () => ipcRenderer.invoke("app:get-dependency-status"),
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),

@@ -8,6 +8,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
 import { promisify } from "node:util";
 import { MIN_YT_DLP_VERSION, YT_DLP_UPDATE_TIMEOUT_MS } from "../Shared/dependencies";
+import type { YtDlpUpdateStatus } from "../Shared/types";
 
 export { YT_DLP_UPDATE_TIMEOUT_MS } from "../Shared/dependencies";
 const RELEASE_URL = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
@@ -24,6 +25,7 @@ interface UpdateOptions {
   getVersion?: (command: string) => Promise<string | null>;
   log?: (message: string) => void;
   onSelected?: (command: string, version: string | null) => void;
+  onStatus?: (status: YtDlpUpdateStatus) => void;
 }
 
 interface Release {
@@ -67,7 +69,11 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
   let selectedPath = options.fallbackPath;
   let selectedVersion: string | null = null;
   let stagingDirectory: string | null = null;
-  if (!spec) return selectedPath;
+  if (!spec) {
+    options.onStatus?.({ status: "managed", version: null });
+    return selectedPath;
+  }
+  options.onStatus?.({ status: "checking", version: null });
 
   const signal = AbortSignal.any([
     AbortSignal.timeout(YT_DLP_UPDATE_TIMEOUT_MS),
@@ -95,6 +101,7 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
     }
 
     options.onSelected?.(selectedPath, selectedVersion);
+    options.onStatus?.({ status: "checking", version: selectedVersion });
 
     log("Checking the latest official stable release");
     const response = await request(RELEASE_URL, {
@@ -107,6 +114,7 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
     if (!latest || release.draft || release.prerelease) throw new Error("Invalid stable release metadata");
     if (selectedVersion && compareVersions(latest, selectedVersion) <= 0) {
       log(`Using ${selectedVersion}`);
+      options.onStatus?.({ status: "current", version: selectedVersion });
       return selectedPath;
     }
     if (!Array.isArray(release.assets)
@@ -126,6 +134,7 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
     stagingDirectory = await fs.mkdtemp(path.join(options.directory, ".update-"));
     const stagedPath = path.join(stagingDirectory, spec.executable);
     log(`Downloading ${latest}`);
+    options.onStatus?.({ status: "downloading", version: selectedVersion });
     const binaryResponse = await request(`${base}/${spec.asset}`, { signal });
     assertResponse(binaryResponse, MAX_BINARY_BYTES);
     const hash = createHash("sha256");
@@ -158,7 +167,9 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
     stagingDirectory = null;
     selectedPath = path.join(installedDirectory, spec.executable);
     log(`Installed ${latest}`);
+    options.onStatus?.({ status: "updated", version: latest });
   } catch (error) {
+    options.onStatus?.({ status: "error", version: selectedVersion });
     log(`Update unavailable; using ${selectedVersion ?? "the existing binary"}: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     if (stagingDirectory) await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {});

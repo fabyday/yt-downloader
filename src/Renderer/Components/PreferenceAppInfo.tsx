@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from "react";
 import type { AppInfo, AppUpdateInfo } from "../../Shared/types";
 import { useI18n } from "../I18nProvider";
+import { YtDlpUpdateInfo } from "./YtDlpUpdateInfo";
 
 interface PreferenceAppInfoProps {
   automaticUpdates: boolean;
@@ -56,6 +57,7 @@ export function PreferenceAppInfo({
 
   return (
     <Stack gap="md" className="preference-app-info">
+      <YtDlpUpdateInfo />
       <Panel padding="lg" radius="md" className="app-identity-card">
         <Stack gap="xs">
           <Text size="xs" weight="semibold" className="download-eyebrow">

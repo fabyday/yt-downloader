@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as net from "node:net";
 import type { Socket } from "node:net";
-import type { DownloadQueueItem } from "../Shared/types";
+import type { DownloadQueueItem, YtDlpUpdateStatus, CookieStatus } from "../Shared/types";
+import type { BrowserCookieOptions } from "../Shared/cookies";
 import {
   encodeWorkerMessage,
   isWorkerRequestEnvelope,
@@ -17,6 +18,8 @@ import {
 import { DownloadEngine, sanitizeResumeKey } from "./DownloadEngine";
 import { DownloadQueueService } from "./DownloadQueueService";
 import { prepareYtDlpOnStartup } from "./YtDlpUpdater";
+import { CookieStore } from "./CookieStore";
+import { exportBrowserCookies } from "./BrowserCookies";
 
 interface ClientSession {
   authenticated: boolean;
@@ -32,11 +35,15 @@ export async function startWorker(): Promise<void> {
   await fs.mkdir(options.cacheDirectory, { recursive: true });
 
   const updateController = new AbortController();
+  const cookies = new CookieStore(path.join(options.stateDirectory, "cookies"));
+  let browserImport: Promise<CookieStatus> | null = null;
+  let updateStatus: YtDlpUpdateStatus = { status: "managed", version: null };
   const ytDlpUpdate = options.ownership === "app-owned" && !process.env.YT_DLP_PATH?.trim()
     ? prepareYtDlpOnStartup({
         directory: path.join(options.stateDirectory, "binaries", "yt-dlp"),
         fallbackPath: options.ytDlpPath,
         signal: updateController.signal,
+        onStatus: (status) => { updateStatus = status; },
       })
     : undefined;
 
@@ -46,6 +53,7 @@ export async function startWorker(): Promise<void> {
     nodeRuntimePath: options.nodeRuntimePath,
     ytDlpPath: options.ytDlpPath,
     resolveYtDlpPath: ytDlpUpdate?.getPath,
+    createCookieSnapshot: () => cookies.createSnapshot(),
   });
   const clients = new Set<ClientSession>();
   let stateRevision = 0;
@@ -107,6 +115,7 @@ export async function startWorker(): Promise<void> {
       for (const client of clients) client.socket.end();
       await queue.shutdown();
       await ytDlpUpdate?.finished;
+      await browserImport?.catch(() => {});
       await new Promise<void>((resolve) => server.close(() => resolve()));
       if (process.platform !== "win32") {
         await removeOwnedSocket(options.endpoint);
@@ -150,6 +159,32 @@ export async function startWorker(): Promise<void> {
       }
 
       switch (request.method) {
+        case "cookies.status":
+          sendResult(session.socket, request, await cookies.getStatus());
+          return;
+        case "cookies.import":
+          sendResult(session.socket, request, await cookies.import((request.params as { contents: unknown }).contents));
+          return;
+        case "cookies.import-browser":
+          if (browserImport) throw new Error("cookies.browserBusy");
+          browserImport = cookies.importFrom(async () => exportBrowserCookies({
+            browser: request.params as BrowserCookieOptions,
+            command: await (ytDlpUpdate?.getPath() ?? Promise.resolve(options.ytDlpPath)),
+            directory: path.join(options.stateDirectory, "cookies"),
+            signal: updateController.signal,
+          }));
+          try {
+            sendResult(session.socket, request, await browserImport);
+          } finally {
+            browserImport = null;
+          }
+          return;
+        case "cookies.clear":
+          sendResult(session.socket, request, await cookies.clear());
+          return;
+        case "dependency.update-status":
+          sendResult(session.socket, request, updateStatus);
+          return;
         case "dependency.get":
           sendResult(session.socket, request, await engine.getDependencyStatuses());
           return;

@@ -1,4 +1,7 @@
 :root {
+  /* Keep in sync with Main/WindowChrome.ts. */
+  --window-title-bar-height: 40px;
+  --browser-tab-strip-height: 48px;
   color-scheme: dark;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -148,14 +151,15 @@ select:focus {
 
 body[data-view="shell"] {
   min-width: 0;
-  min-height: 48px;
+  min-height: calc(var(--window-title-bar-height) + var(--browser-tab-strip-height));
   overflow: hidden;
 }
 
 .browser-shell {
+  display: block;
   width: 100%;
-  height: 48px;
-  min-height: 48px;
+  height: calc(var(--window-title-bar-height) + var(--browser-tab-strip-height));
+  min-height: calc(var(--window-title-bar-height) + var(--browser-tab-strip-height));
   overflow: hidden;
   border-bottom: 1px solid var(--kawai-color-border);
   background: color-mix(
@@ -167,7 +171,8 @@ body[data-view="shell"] {
 
 .browser-tab-strip {
   width: 100%;
-  height: 48px;
+  height: var(--browser-tab-strip-height);
+  -webkit-app-region: no-drag;
   min-width: 0;
   padding: 4px 10px;
 }
@@ -267,12 +272,67 @@ body[data-view="shell"] {
   flex: 1 1 auto;
 }
 
-.browser-shell-brand {
+.window-title-bar {
+  --title-bar-left-inset: 0px;
+  --title-bar-right-inset: 138px;
+  height: var(--window-title-bar-height);
+  min-height: var(--window-title-bar-height);
+  width: 100%;
+  overflow: hidden;
+  background: #111317;
+  color: #cdd5df;
+  border-bottom: 1px solid #232832;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.window-title-bar[data-platform="darwin"] {
+  --title-bar-left-inset: 84px;
+  --title-bar-right-inset: 0px;
+}
+
+.window-title-bar-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 100%;
+  /* Native overlay geometry respects Windows right controls and Mac traffic lights. */
+  margin-left: env(titlebar-area-x, var(--title-bar-left-inset));
+  width: env(titlebar-area-width, calc(100% - var(--title-bar-left-inset) - var(--title-bar-right-inset)));
+  min-width: 0;
+  padding: 0 14px;
+}
+
+.window-title-bar-logo {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: #a9bfff;
+}
+
+.window-title-bar-brand {
   flex: 0 0 auto;
-  align-self: center;
-  color: var(--kawai-color-muted-foreground);
-  letter-spacing: 0.09em;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   white-space: nowrap;
+}
+
+.window-title-bar-caption {
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid #343b47;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #949eae;
+}
+
+.window-title-bar button,
+.window-title-bar a,
+.window-title-bar input {
+  -webkit-app-region: no-drag;
 }
 
 body[data-view="queue"] {
@@ -2586,18 +2646,21 @@ body[data-view="queue"] {
 }
 
 .queue-window-shell {
+  display: grid;
+  grid-template-rows: var(--window-title-bar-height) minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  padding: 12px;
+  padding: 0;
 }
 
 .queue-window-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: 100%;
-  height: 100%;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  margin: 12px;
   min-height: 0;
   gap: 12px;
   overflow: hidden;

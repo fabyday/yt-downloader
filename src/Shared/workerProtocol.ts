@@ -1,9 +1,12 @@
 import type {
   DependencyStatuses,
+  CookieStatus,
+  YtDlpUpdateStatus,
   DownloadQueueItem,
 } from "./types";
 
 export const WORKER_PROTOCOL_VERSION = 1;
+import type { BrowserCookieOptions } from "./cookies";
 export const WORKER_MAX_MESSAGE_BYTES = 6 * 1024 * 1024;
 
 export type WorkerOwnershipMode = "app-owned" | "external-owned";
@@ -35,6 +38,11 @@ export interface WorkerHelloResult {
 }
 
 export interface WorkerRequestMap {
+  "cookies.status": Record<string, never>;
+  "cookies.import": { contents: string };
+  "cookies.import-browser": BrowserCookieOptions;
+  "cookies.clear": Record<string, never>;
+  "dependency.update-status": Record<string, never>;
   "worker.hello": WorkerHelloParams;
   "worker.shutdown": Record<string, never>;
   "dependency.get": Record<string, never>;
@@ -50,6 +58,11 @@ export interface WorkerRequestMap {
 }
 
 export interface WorkerResponseMap {
+  "cookies.status": CookieStatus;
+  "cookies.import": CookieStatus;
+  "cookies.import-browser": CookieStatus;
+  "cookies.clear": CookieStatus;
+  "dependency.update-status": YtDlpUpdateStatus;
   "worker.hello": WorkerHelloResult;
   "worker.shutdown": { shuttingDown: boolean };
   "dependency.get": DependencyStatuses;

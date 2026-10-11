@@ -45,7 +45,7 @@ test("downloads, verifies, and atomically installs into the user cache without t
   assert.equal(path.dirname(path.dirname(installed)), options.directory);
   assert.deepEqual(await fs.readFile(installed), binary);
   assert.equal(await fs.readFile(options.fallbackPath, "utf8"), "2026.07.04");
-  assert.equal((await fs.stat(installed)).mode & 0o777, 0o755);
+  if (process.platform !== "win32") assert.equal((await fs.stat(installed)).mode & 0o777, 0o755);
   assert.equal((await fs.readdir(options.directory)).length, 1);
   assert.deepEqual(calls, [releaseUrl,
     `https://github.com/yt-dlp/yt-dlp/releases/download/${latest}/SHA2-256SUMS`,
@@ -78,6 +78,20 @@ test("offline startup selects the newest working cache, skipping broken and fore
 test("network and rate-limit failures fall back without breaking startup", async (t) => {
   const { options } = await fixture(t, { fetch: async () => new Response("rate limited", { status: 403 }) });
   assert.equal(await updateYtDlpOnStartup(options), options.fallbackPath);
+});
+
+test("reports startup checking, installing, current and failed states to the UI", async (t) => {
+  const states = [];
+  const { options } = await fixture(t, { onStatus: (value) => states.push(value) });
+  await updateYtDlpOnStartup(options);
+  assert.ok(states.some((value) => value.status === 'checking'));
+  assert.ok(states.some((value) => value.status === 'downloading'));
+  assert.deepEqual(states.at(-1), { status: 'updated', version: latest });
+  await updateYtDlpOnStartup(options);
+  assert.deepEqual(states.at(-1), { status: 'current', version: latest });
+  options.fetch = async () => { throw new Error('offline'); };
+  await updateYtDlpOnStartup(options);
+  assert.deepEqual(states.at(-1), { status: 'error', version: latest });
 });
 
 test("a newer bundled binary is not downgraded", async (t) => {

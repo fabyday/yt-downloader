@@ -20,6 +20,7 @@ import {
   PreferenceGeneralSettings,
 } from "../Components";
 import { useI18n } from "../I18nProvider";
+import { PreferenceCookies } from "../Components/PreferenceCookies";
 
 interface PreferenceOverlayViewProps {
   onClose: () => void;
@@ -123,6 +124,7 @@ export function PreferenceOverlayView({
                 onChange={updateDraft}
                 onChooseDirectory={() => void chooseDirectory()}
               />
+              <PreferenceCookies />
             </TabPanel>
             <TabPanel value="app-info" className="preference-tab-panel">
               <PreferenceAppInfo

@@ -16,6 +16,7 @@ const mockBridge = `(() => {
   let tabsChangedHandler = () => {};
   let queueItems = [];
   let queueLoaded = false;
+  let cookieStatus = { configured: false, count: 0 };
   let activeTabId = "tab-1";
   let tabSequence = 1;
   let tabs = [{ id: "tab-1", title: ${JSON.stringify(mockVideoTitle)}, active: true }];
@@ -156,6 +157,11 @@ const mockBridge = `(() => {
 
   window.YT = { Player: MockPlayer, PlayerState: { PLAYING: 1 } };
   window.ytClipper = {
+    getCookieStatus: async () => ({ ...cookieStatus }),
+    importCookies: async () => (cookieStatus = { configured: true, count: 3 }),
+    importBrowserCookies: async () => (cookieStatus = { configured: true, count: 3 }),
+    clearCookies: async () => (cookieStatus = { configured: false, count: 0 }),
+    getYtDlpUpdateStatus: async () => ({ status: "current", version: "2026.10.01" }),
     getDependencyStatus: async () => ({
       ytDlp: { available: true, command: "mock", version: "mock" },
       ffmpeg: { available: true, command: "mock", version: "mock" }
@@ -374,3 +380,5 @@ const server = http.createServer((request, response) => {
 server.listen(port, "127.0.0.1", () => {
   console.log(`UI harness listening on http://127.0.0.1:${port}`);
 });
+
+module.exports = server;

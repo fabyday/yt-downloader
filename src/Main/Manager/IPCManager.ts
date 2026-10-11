@@ -1,5 +1,6 @@
 import { app, dialog, ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
+import * as fs from "node:fs/promises";
 import {
   failureReturnCode,
   successReturnCode,
@@ -8,6 +9,7 @@ import {
 import { normalizeLocale } from "../../Shared/locale";
 import { translate as t } from "../../Shared/nodeI18n";
 import { YT_DLP_UPDATE_TIMEOUT_MS } from "../../Shared/dependencies";
+import { browserCookieSpec, COOKIE_IMPORT_TIMEOUT_MS, type BrowserCookieOptions } from "../../Shared/cookies";
 import type { DownloadQueueItem } from "../../Shared/types";
 import type { AppPreferences } from "../../Shared/types";
 import { BaseManager } from "./BaseManager";
@@ -18,6 +20,11 @@ import { PreferenceManager } from "./PreferenceManager";
 import { UpdateManager } from "./UpdateManager";
 
 const IPC_CHANNELS = [
+  "cookies:status",
+  "cookies:import",
+  "cookies:import-browser",
+  "cookies:clear",
+  "app:yt-dlp-update-status",
   "app:get-dependency-status",
   "app:get-info",
   "app:check-updates",
@@ -96,6 +103,40 @@ export class IPCManager extends BaseManager<IpcReturnType> {
   }
 
   private registerHandlers(): void {
+    ipcMain.handle("cookies:import-browser", (_event, options: BrowserCookieOptions) => {
+      browserCookieSpec(options);
+      return this.workerManager.getClient().request("cookies.import-browser", options,
+        YT_DLP_UPDATE_TIMEOUT_MS + COOKIE_IMPORT_TIMEOUT_MS + 15_000);
+    });
+    ipcMain.handle("cookies:status", () => this.workerManager.getClient().request("cookies.status", {}));
+    ipcMain.handle("cookies:clear", () => this.workerManager.getClient().request("cookies.clear", {}));
+    ipcMain.handle("app:yt-dlp-update-status", () => this.workerManager.getClient().request("dependency.update-status", {}));
+    ipcMain.handle("cookies:import", async () => {
+      const locale = this.preferenceManager.getPreferences().locale;
+      const result = await dialog.showOpenDialog({
+        title: t(locale, "cookies.import"),
+        properties: ["openFile"],
+        filters: [{ name: "cookies.txt", extensions: ["txt"] }],
+      });
+      if (result.canceled || !result.filePaths[0]) return null;
+      const file = await fs.open(result.filePaths[0], "r");
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("cookies.invalid");
+        // A bounded read also handles a file growing after stat().
+        const buffer = Buffer.alloc(1024 * 1024 + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          const { bytesRead } = await file.read(buffer, length, buffer.length - length, null);
+          if (!bytesRead) break;
+          length += bytesRead;
+        }
+        if (length > 1024 * 1024) throw new Error("cookies.invalid");
+        return await this.workerManager.getClient().request("cookies.import", { contents: buffer.subarray(0, length).toString("utf8") });
+      } finally {
+        await file.close();
+      }
+    });
     ipcMain.handle("app:get-dependency-status", () =>
       this.workerManager.getClient().request("dependency.get", {}, YT_DLP_UPDATE_TIMEOUT_MS + 15_000),
     );
