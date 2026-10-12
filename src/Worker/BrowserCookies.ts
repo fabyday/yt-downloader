@@ -5,6 +5,26 @@ import { browserCookieSpec, COOKIE_IMPORT_TIMEOUT_MS, type BrowserCookieOptions 
 import { normalizeCookieFile, MAX_COOKIE_BYTES } from "./CookieStore";
 
 const MAX_EXPORT_BYTES = 32 * 1024 * 1024;
+
+// Some yt-dlp versions export Chromium's expires_utc unchanged: microseconds
+// since 1601, not Netscape's Unix seconds. Convert only Chromium browser exports,
+// using BigInt before any Number conversion loses precision. Already-converted
+// Unix timestamps and session cookies are left alone.
+export function normalizeBrowserCookieExpiry(contents: string, browser: BrowserCookieOptions["browser"]): string {
+  if (browser === "firefox" || browser === "safari") return contents;
+  return contents.split(/\r?\n/).flatMap(line => {
+    if (line.startsWith("#") && !line.startsWith("#HttpOnly_")) return [line];
+    const fields = line.split("\t");
+    if (fields.length !== 7 || !/^\d{16,19}$/.test(fields[4])) return [line];
+    const raw = BigInt(fields[4]);
+    if (raw <= BigInt(Number.MAX_SAFE_INTEGER) || raw > 9223372036854775807n) return [line];
+    const seconds = raw / 1_000_000n - 11_644_473_600n;
+    // A pre-Unix-epoch expiry is expired, never a session cookie (0).
+    if (seconds <= 0n) return [];
+    fields[4] = seconds.toString();
+    return [fields.join("\t")];
+  }).join("\n");
+}
 interface ExportOptions {
   browser: BrowserCookieOptions;
   command: string;
@@ -30,8 +50,10 @@ export async function exportBrowserCookies(options: ExportOptions): Promise<stri
       "--ignore-config", "--no-plugin-dirs", "--no-cache-dir",
       "--cookies-from-browser", spec, "--cookies", filename,
     ], signal);
-    if (/failed to decrypt|could not decrypt|cannot decrypt|could not be decrypted|DPAPI|app.bound|(?:keyring|keychain).*(?:error|failed|denied)/i.test(result.stderr)) throw new Error("cookies.decryptFailed");
-    if (/could not copy|database.*locked|permission denied|being used by another process/i.test(result.stderr)) throw new Error("cookies.browserLocked");
+    if (/find-generic-password.*(?:failed|error)|(?:keychain|keyring).*(?:error|failed|denied)|(?:failed|unable) to (?:read|retrieve).*(?:keychain|keyring)/i.test(result.stderr)) throw new Error("cookies.keychainAccessFailed");
+    if (/operation not permitted|permission denied|access is denied/i.test(result.stderr)) throw new Error("cookies.permissionDenied");
+    if (/failed to decrypt|could not decrypt|cannot decrypt|could not be decrypted|DPAPI|app.bound/i.test(result.stderr)) throw new Error("cookies.decryptFailed");
+    if (/could not copy|database.*locked|being used by another process/i.test(result.stderr)) throw new Error("cookies.browserLocked");
     if (/could not find|no such file|does not exist/i.test(result.stderr)) throw new Error("cookies.browserMissing");
     // CLI-only export completes the jar when its context exits, but reports
     // missing URL (exit 2). Accept only that documented no-download outcome.
@@ -47,7 +69,7 @@ export async function exportBrowserCookies(options: ExportOptions): Promise<stri
     } finally {
       await file.close();
     }
-    const resultFile = normalizeCookieFile(contents, Date.now(), MAX_EXPORT_BYTES);
+    const resultFile = normalizeCookieFile(normalizeBrowserCookieExpiry(contents, options.browser.browser), Date.now(), MAX_EXPORT_BYTES, options.browser.site);
     if (Buffer.byteLength(resultFile.contents, "utf8") > MAX_COOKIE_BYTES) throw new Error("cookies.invalid");
     return resultFile.contents;
   } catch (error) {

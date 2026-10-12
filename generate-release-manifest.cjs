@@ -3,7 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const packageJson = require("./package.json");
-const distDirectory = path.resolve(__dirname, "dist");
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 2 || args[0] !== "--dir")) throw new Error("Usage: pnpm release:manifest --dir dist/<platform>-<arch>");
+const distDirectory = path.resolve(__dirname, args[1] || `dist/${process.platform}-${process.arch}`);
 const repository = "fabyday/yt-downloader";
 
 const artifacts = fs

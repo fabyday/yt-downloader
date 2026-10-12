@@ -56,6 +56,9 @@ export interface QueueViewItem {
 }
 
 interface RendererViewSnapshot {
+  segmentNotice: { message: string; revision: number } | null;
+  selectionMode: import("../Shared/selectionMode").SelectionMode;
+  previewMessage: string | null;
   downloadSegmentItems: readonly DownloadSegmentViewItem[];
   downloadSegmentSummary: { count: number; duration: string };
   presetDetails: { meta: string; title: string };
@@ -82,6 +85,9 @@ interface RendererViewActions {
 }
 
 let snapshot: RendererViewSnapshot = {
+  segmentNotice: null,
+  selectionMode: "free",
+  previewMessage: null,
   downloadSegmentItems: [],
   downloadSegmentSummary: { count: 0, duration: "00:00.000" },
   presetDetails: { meta: "", title: "" },
@@ -120,6 +126,12 @@ function updateSnapshot(partial: Partial<RendererViewSnapshot>): void {
   emitChange();
 }
 
+export function setPreviewMessage(previewMessage: string | null): void {
+  updateSnapshot({ previewMessage });
+}
+
+export function setSelectionModeView(selectionMode: RendererViewSnapshot["selectionMode"]): void { updateSnapshot({ selectionMode }); }
+
 export function configureRendererViewActions(
   nextActions: Partial<RendererViewActions>,
 ): void {
@@ -155,6 +167,14 @@ export function setQueueViewItems(items: readonly QueueViewItem[]): void {
 
 export function setSegmentViewItems(items: readonly SegmentViewItem[]): void {
   updateSnapshot({ segmentItems: items });
+}
+
+let segmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+let segmentNoticeRevision = 0;
+export function showSegmentNotice(message: string): void {
+  clearTimeout(segmentNoticeTimer);
+  updateSnapshot({ segmentNotice: { message, revision: ++segmentNoticeRevision } });
+  segmentNoticeTimer = setTimeout(() => updateSnapshot({ segmentNotice: null }), 1000);
 }
 
 export function setTimelineSegmentViewItems(

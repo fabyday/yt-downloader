@@ -1,18 +1,19 @@
 import {
   Button,
-  Code,
   Grid,
   Input,
   Panel,
-  Select,
   Stack,
-  Surface,
+  Switch,
   Text,
   type SelectOption,
 } from "@kawaikara/kawai-ui";
 import type { SupportedLocale } from "../../Shared/locale";
 import type { AppPreferences } from "../../Shared/types";
 import { useI18n } from "../I18nProvider";
+import { EXTRA_PRESETS } from "../../Shared/encoding";
+import { PopupSelect as Select } from "./PopupSelect";
+import { NumberInput } from "./NumberInput";
 
 interface PreferenceGeneralSettingsProps {
   preferences: AppPreferences;
@@ -50,12 +51,12 @@ export function PreferenceGeneralSettings({
     { value: "h264-mp4", label: "H.264 MP4" },
     { value: "premiere-prores", label: "Premiere ProRes 422 HQ" },
     { value: "davinci-dnxhr", label: "DaVinci DNxHR HQX" },
+    ...EXTRA_PRESETS.map(preset => ({ value: preset.id, label: preset.name })),
   ];
 
   return (
     <Grid columns={2} gap="md" className="preference-general-grid">
-      <Stack gap="md">
-        <Panel padding="md" radius="md" className="preference-section-card">
+        <Panel padding="md" radius="md" className="preference-section-card preference-application-card">
           <Stack gap="md">
             <Text size="md" weight="semibold">
               {t("preference.application")}
@@ -79,10 +80,18 @@ export function PreferenceGeneralSettings({
             <Button variant="secondary" onClick={onChooseDirectory}>
               {t("preference.chooseDefaultFolder")}
             </Button>
+            <Switch
+              checked={preferences.hardwareAcceleration}
+              label={t("preference.hardwareAcceleration")}
+              description={t("preference.hardwareAccelerationDescription")}
+              onCheckedChange={(hardwareAcceleration) =>
+                onChange({ hardwareAcceleration })
+              }
+            />
           </Stack>
         </Panel>
 
-        <Panel padding="md" radius="md" className="preference-section-card">
+        <Panel padding="md" radius="md" className="preference-section-card preference-default-card">
           <Stack gap="md">
             <Text size="md" weight="semibold">
               {t("preference.defaultDownload")}
@@ -113,10 +122,7 @@ export function PreferenceGeneralSettings({
             />
           </Stack>
         </Panel>
-      </Stack>
-
-      <Stack gap="md">
-        <Panel padding="md" radius="md" className="preference-section-card">
+        <Panel padding="md" radius="md" className="preference-section-card preference-playback-card">
           <Stack gap="md">
             <Text size="md" weight="semibold">
               {t("preference.playbackSteps")}
@@ -125,68 +131,44 @@ export function PreferenceGeneralSettings({
               {t("preference.playbackStepsDescription")}
             </Text>
             <Grid columns={2} gap="sm" className="preference-number-grid">
-              <Input
-                type="number"
-                min="0.01"
-                max="3600"
-                step="0.1"
+              <NumberInput
+                min={0.01}
+                max={3600}
+                step={0.1}
+                layout="stacked"
                 label={t("preference.largeStep")}
                 value={preferences.seekLargeSeconds}
-                onChange={(event) =>
-                  onChange({ seekLargeSeconds: Number(event.target.value) })
+                onValueChange={(value) =>
+                  onChange({ seekLargeSeconds: value })
                 }
               />
-              <Input
-                type="number"
-                min="0.01"
-                max="3600"
-                step="0.1"
+              <NumberInput
+                min={0.01}
+                max={3600}
+                step={0.1}
+                layout="stacked"
                 label={t("preference.smallStep")}
                 value={preferences.seekSmallSeconds}
-                onChange={(event) =>
-                  onChange({ seekSmallSeconds: Number(event.target.value) })
+                onValueChange={(value) =>
+                  onChange({ seekSmallSeconds: value })
                 }
               />
             </Grid>
-            <Input
-              type="number"
-              min="1"
-              max="240"
-              step="1"
+            <NumberInput
+              min={1}
+              max={240}
+              step={1}
+              layout="stacked"
               label={t("preference.frameRate")}
               description={t("preference.frameRateDescription")}
               value={preferences.frameRate}
-              onChange={(event) =>
-                onChange({ frameRate: Number(event.target.value) })
+              onValueChange={(value) =>
+                onChange({ frameRate: value })
               }
             />
           </Stack>
         </Panel>
 
-        <Panel padding="md" radius="md" className="preference-section-card">
-          <Stack gap="sm">
-            <Text size="md" weight="semibold">
-              {t("preference.shortcuts")}
-            </Text>
-            <ShortcutRow label={t("shortcut.focusUrl")} keys="⌘/Ctrl + L" />
-            <ShortcutRow label={t("shortcut.newTab")} keys="⌘/Ctrl + T" />
-            <ShortcutRow label={t("shortcut.playPause")} keys="Space" />
-            <ShortcutRow label={t("shortcut.smallStep")} keys="← / →" />
-            <ShortcutRow label={t("shortcut.fineStep")} keys="[ / ]" />
-            <ShortcutRow label={t("shortcut.largeStep")} keys="Shift + ← / →" />
-            <ShortcutRow label={t("shortcut.frameStep")} keys="Alt + ← / →" />
-          </Stack>
-        </Panel>
-      </Stack>
     </Grid>
-  );
-}
-
-function ShortcutRow({ label, keys }: { label: string; keys: string }) {
-  return (
-    <Surface padding="sm" radius="sm" tone="muted" className="shortcut-row">
-      <Text size="sm">{label}</Text>
-      <Code>{keys}</Code>
-    </Surface>
   );
 }

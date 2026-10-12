@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell } from "electron";
+import { app, dialog, ipcMain, shell, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import * as fs from "node:fs/promises";
 import {
@@ -16,15 +16,27 @@ import { BaseManager } from "./BaseManager";
 import { IpcReturnType } from "./ReturnTypes";
 import { WindowManager } from "./WindowManager";
 import { WorkerManager } from "./WorkerManager";
+import { CompanionManager } from "./CompanionManager";
 import { PreferenceManager } from "./PreferenceManager";
 import { UpdateManager } from "./UpdateManager";
+import { macAppBundleForExecutable, requestCookieKeychainAccess } from "../CookiePermission";
+import { applyPreviewCookies, PREVIEW_PARTITION } from "../PreviewCookies";
+import type { CookieStatus } from "../../Shared/types";
+import { cookieSite } from "../../Shared/cookies";
+import { previewSource } from "../../Shared/VideoSource";
 
 const IPC_CHANNELS = [
+  "preview:resolve",
+  "cookies:request-access",
+  "cookies:open-permissions",
+  "cookies:browser-status",
+  "cookies:profiles",
   "cookies:status",
   "cookies:import",
   "cookies:import-browser",
   "cookies:clear",
   "app:yt-dlp-update-status",
+  "app:yt-dlp-update-check",
   "app:get-dependency-status",
   "app:get-info",
   "app:check-updates",
@@ -53,12 +65,15 @@ const IPC_CHANNELS = [
 export class IPCManager extends BaseManager<IpcReturnType> {
   private initialized = false;
   private removeQueueListener: (() => void) | null = null;
+  private cookieStatus: CookieStatus = { configured: false, count: 0, previewApplied: false };
+  private cookieOperations: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly workerManager: WorkerManager,
     private readonly windowManager: WindowManager,
     private readonly preferenceManager: PreferenceManager,
     private readonly updateManager: UpdateManager,
+    private readonly companionManager: CompanionManager,
   ) {
     super();
   }
@@ -73,8 +88,10 @@ export class IPCManager extends BaseManager<IpcReturnType> {
 
     try {
       this.registerHandlers();
+      await this.syncPreviewCookies();
       this.removeQueueListener = this.workerManager.onQueueChanged((items) => {
         this.windowManager.broadcast("queue:changed", items);
+        this.companionManager.reportQueue(items);
       });
       this.initialized = true;
       return successReturnCode(
@@ -92,6 +109,7 @@ export class IPCManager extends BaseManager<IpcReturnType> {
   }
 
   async finalize(): Promise<ReturnCode<IpcReturnType>> {
+    await this.cookieOperations;
     this.removeQueueListener?.();
     this.removeQueueListener = null;
     this.removeHandlers();
@@ -103,15 +121,57 @@ export class IPCManager extends BaseManager<IpcReturnType> {
   }
 
   private registerHandlers(): void {
+    ipcMain.handle("preview:resolve", async (_event, videoId: unknown) => {
+      const source = previewSource(videoId);
+      if (!source) return { ok: false, error: "preview.failed" };
+      await this.cookieOperations;
+      return this.workerManager.getClient().request("preview.resolve", { videoId: source.key }, YT_DLP_UPDATE_TIMEOUT_MS + 90_000);
+    });
+    let accessRequest: Promise<void> | null = null;
+    ipcMain.handle("cookies:request-access", async (_event, options: BrowserCookieOptions) => {
+      if (accessRequest) throw new Error("cookies.browserBusy");
+      accessRequest = requestCookieKeychainAccess(options);
+      try { await accessRequest; } finally { accessRequest = null; }
+    });
+    ipcMain.handle("cookies:open-permissions", async (_event, target: unknown) => {
+      if (process.platform !== "darwin") throw new Error("cookies.settingsUnavailable");
+      if (target === "files") {
+        // Development has no kawai-downloader.app: reveal the actual Electron bundle
+        // so the user can add it without guessing a node_modules/pnpm store path.
+        const executable = await fs.realpath(process.execPath);
+        const bundle = macAppBundleForExecutable(executable);
+        if (bundle) shell.showItemInFolder(bundle);
+        await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
+      } else if (target === "keychain") {
+        const candidates = ["/System/Library/CoreServices/Applications/Keychain Access.app", "/System/Applications/Utilities/Keychain Access.app"];
+        for (const candidate of candidates) {
+          if (await fs.stat(candidate).then(() => true, () => false)) {
+            const error = await shell.openPath(candidate);
+            if (error) throw new Error("cookies.settingsUnavailable");
+            return;
+          }
+        }
+        throw new Error("cookies.settingsUnavailable");
+      } else throw new Error("cookies.settingsUnavailable");
+    });
+    ipcMain.handle("cookies:browser-status", (_event, options: BrowserCookieOptions) =>
+      this.workerManager.getClient().request("cookies.browser-status", options));
+    ipcMain.handle("cookies:profiles", (_event, options: BrowserCookieOptions) =>
+      this.workerManager.getClient().request("cookies.profiles", options));
     ipcMain.handle("cookies:import-browser", (_event, options: BrowserCookieOptions) => {
       browserCookieSpec(options);
-      return this.workerManager.getClient().request("cookies.import-browser", options,
-        YT_DLP_UPDATE_TIMEOUT_MS + COOKIE_IMPORT_TIMEOUT_MS + 15_000);
+      return this.updateCookies(() => this.workerManager.getClient().request("cookies.import-browser", options,
+        YT_DLP_UPDATE_TIMEOUT_MS + COOKIE_IMPORT_TIMEOUT_MS + 15_000));
     });
-    ipcMain.handle("cookies:status", () => this.workerManager.getClient().request("cookies.status", {}));
-    ipcMain.handle("cookies:clear", () => this.workerManager.getClient().request("cookies.clear", {}));
+    ipcMain.handle("cookies:status", async () => { await this.cookieOperations; return this.cookieStatus; });
+    ipcMain.handle("cookies:clear", (_event, site: unknown) => {
+      const target = cookieSite(site);
+      return this.updateCookies(() => this.workerManager.getClient().request("cookies.clear", { site: target }));
+    });
     ipcMain.handle("app:yt-dlp-update-status", () => this.workerManager.getClient().request("dependency.update-status", {}));
-    ipcMain.handle("cookies:import", async () => {
+    ipcMain.handle("app:yt-dlp-update-check", () => this.workerManager.getClient().request("dependency.update-check", {}));
+    ipcMain.handle("cookies:import", async (_event, site: unknown) => {
+      const target = cookieSite(site);
       const locale = this.preferenceManager.getPreferences().locale;
       const result = await dialog.showOpenDialog({
         title: t(locale, "cookies.import"),
@@ -132,7 +192,7 @@ export class IPCManager extends BaseManager<IpcReturnType> {
           length += bytesRead;
         }
         if (length > 1024 * 1024) throw new Error("cookies.invalid");
-        return await this.workerManager.getClient().request("cookies.import", { contents: buffer.subarray(0, length).toString("utf8") });
+        return await this.updateCookies(() => this.workerManager.getClient().request("cookies.import", { contents: buffer.subarray(0, length).toString("utf8"), site: target }));
       } finally {
         await file.close();
       }
@@ -141,6 +201,8 @@ export class IPCManager extends BaseManager<IpcReturnType> {
       this.workerManager.getClient().request("dependency.get", {}, YT_DLP_UPDATE_TIMEOUT_MS + 15_000),
     );
     ipcMain.handle("app:get-info", () => ({
+      isPackaged: app.isPackaged,
+      runtimeAppPath: process.platform === "darwin" ? macAppBundleForExecutable(process.execPath) : null,
       arch: process.arch,
       name: app.getName(),
       platform: process.platform,
@@ -265,6 +327,33 @@ export class IPCManager extends BaseManager<IpcReturnType> {
         return preferences;
       },
     );
+  }
+
+  private async syncPreviewCookies(): Promise<CookieStatus> {
+    const client = this.workerManager.getClient();
+    const status = await client.request("cookies.status", {});
+    try {
+      const contents = status.configured ? await client.request("cookies.preview", {}) : null;
+      const previewCount = await applyPreviewCookies(session.fromPartition(PREVIEW_PARTITION), contents);
+      this.cookieStatus = { ...status, previewCount, previewApplied: previewCount > 0, previewError: false };
+    } catch {
+      this.cookieStatus = { ...status, previewApplied: false, previewCount: 0, previewError: true };
+    }
+    return this.cookieStatus;
+  }
+
+  // Preview cookies are a disposable copy. A logged-out iframe may delete or
+  // replace them; it must never overwrite the explicitly imported source jar.
+
+  private updateCookies(operation: () => Promise<CookieStatus>): Promise<CookieStatus> {
+    const result = this.cookieOperations.then(async () => {
+      await operation();
+      const status = await this.syncPreviewCookies();
+      this.windowManager.broadcast("cookies:changed", status);
+      return status;
+    });
+    this.cookieOperations = result.catch(() => {});
+    return result;
   }
 
   private removeHandlers(): void {

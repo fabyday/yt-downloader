@@ -1,0 +1,23 @@
+{
+  "yt-dlp": {
+    "darwin": { "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos", "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202" },
+    "win32-x64": { "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe", "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a" },
+    "win32-arm64": { "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_arm64.exe", "sha256": "05b438997bafc3affdfda9d041353c9d73e04dc842207254b655b0887c4445b0" }
+  },
+  "ffmpeg": {
+    "darwin-x64": { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64", "sha256": "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894" },
+    "darwin-arm64": { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64", "sha256": "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584" },
+    "win32-x64": { "url": "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2026-10-11-18-51/ffmpeg-N-127371-gd9242028a6-win64-gpl.zip", "sha256": "8e730c0127962329c8744e41d6a6fd706444630192c8df7193705fb2ffd917e6", "archive": "zip" },
+    "win32-arm64": { "url": "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2026-10-11-18-51/ffmpeg-N-127371-gd9242028a6-winarm64-gpl.zip", "sha256": "9c2e8334e140f0253db56249bba4e4248f93f5d03f1c14f6244447e39b44166a", "archive": "zip" }
+  },
+  "ffmpeg-notices": {
+    "darwin-x64": [
+      { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-x64.LICENSE", "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af" },
+      { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-x64.README", "sha256": "e88a0325f8e5b75210355e37341824f074d3cd82def2125be54c914b62848a36" }
+    ],
+    "darwin-arm64": [
+      { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-arm64.LICENSE", "sha256": "cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2" },
+      { "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-arm64.README", "sha256": "05ba4b92c96605434b1aaae3eedf5a2c280c9607bf78ffca9a5b536d9af2dc6a" }
+    ]
+  }
+}

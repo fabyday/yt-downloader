@@ -57,12 +57,13 @@ app.whenReady().then(async () => {
   const main = manager.mainWindow;
   await waitForUi(main.webContents, '.window-title-bar');
   assert.equal(Menu.getApplicationMenu(), null);
-  assert.equal(main.isMenuBarVisible(), false);
+  if (process.platform !== 'darwin') assert.equal(main.isMenuBarVisible(), false);
   let layout = await geometry(main.webContents);
   assert.equal(layout.titlebar.height, 40);
   assert.equal(layout.tabs.y, 40);
   assert.equal(layout.tabs.height, 48);
   assert.equal(layout.drag, 'drag');
+  assert.ok(Math.abs(layout.content.x + layout.content.width / 2 - layout.viewport.width / 2) < 1);
   if (process.platform === 'win32') {
     assert.equal(layout.overlay.visible, true);
     assert.ok(layout.content.right <= layout.overlay.x + layout.overlay.width + 1);
@@ -87,7 +88,7 @@ app.whenReady().then(async () => {
   const queue = manager.queueWindow;
   await waitForUi(queue.webContents, '.queue-window-panel');
   layout = await geometry(queue.webContents);
-  assert.equal(queue.isMenuBarVisible(), false);
+  if (process.platform !== 'darwin') assert.equal(queue.isMenuBarVisible(), false);
   assert.equal(layout.titlebar.height, 40);
   assert.equal(layout.panel.y, 52);
   assert.ok(layout.panel.bottom <= layout.viewport.height - 11);

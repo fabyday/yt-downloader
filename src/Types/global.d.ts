@@ -2,6 +2,7 @@ import type { YtClipperApi } from "../Shared/types";
 
 declare global {
   interface YouTubePlayer {
+    destroy(): void;
     cueVideoById(videoId: string): void;
     loadVideoById(videoId: string): void;
     getCurrentTime(): number;
@@ -21,6 +22,7 @@ declare global {
     events: {
       onReady(): void;
       onStateChange(): void;
+      onError?(event: { data: number }): void;
     };
   }
 

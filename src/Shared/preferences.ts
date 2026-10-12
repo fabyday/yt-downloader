@@ -1,5 +1,7 @@
 import { normalizeLocale, type SupportedLocale } from "./locale";
 import type { AppPreferences } from "./types";
+import { DEFAULT_SHORTCUTS, normalizeShortcuts } from "./shortcuts";
+import { EXTRA_PRESETS } from "./encoding";
 
 export const DOWNLOAD_QUALITIES = [
   "best",
@@ -18,9 +20,12 @@ export const ENCODING_PRESETS = [
   "h264-mp4",
   "premiere-prores",
   "davinci-dnxhr",
+  ...EXTRA_PRESETS.map(preset => preset.id),
 ] as const;
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
+  shortcuts: { ...DEFAULT_SHORTCUTS },
+  hardwareAcceleration: true,
   automaticUpdates: true,
   defaultDownloadQuality: "best",
   defaultEncodingPreset: "youtube-copy",
@@ -37,6 +42,11 @@ export function normalizeAppPreferences(
   defaults: AppPreferences = DEFAULT_APP_PREFERENCES,
 ): AppPreferences {
   return {
+    shortcuts: normalizeShortcuts(value?.shortcuts ?? defaults.shortcuts),
+    hardwareAcceleration: normalizeBoolean(
+      value?.hardwareAcceleration,
+      defaults.hardwareAcceleration,
+    ),
     automaticUpdates: normalizeBoolean(
       value?.automaticUpdates,
       defaults.automaticUpdates,

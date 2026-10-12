@@ -1,55 +1,72 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
   workflow_dispatch:
 
-jobs:
-  windows:
-    name: Windows package
-    runs-on: windows-latest
+permissions:
+  contents: read
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, platform: win32, arch: x64 }
+          - { runner: windows-11-arm, platform: win32, arch: arm64 }
+          - { runner: macos-15-intel, platform: darwin, arch: x64 }
+          - { runner: macos-15, platform: darwin, arch: arm64 }
+    env:
+      # CI artifacts are unsigned test packages, never published automatically.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # pnpm must exist before setup-node tries to locate/cache its store.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
           cache: pnpm
-
-      - name: Setup pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.33.0 --activate
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify bundled binaries
-        shell: pwsh
-        run: |
-          $required = @(
-            "thirdparty/bin/win32/yt-dlp.exe",
-            "thirdparty/bin/win32/ffmpeg.exe"
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Missing required binary: $path"
-            }
-          }
+      - name: Test build configuration
+        run: pnpm test:build
 
-      - name: Build Windows app
-        run: pnpm run build
+      - name: Build native application and installers
+        run: pnpm build --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
 
-      - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+      - name: Generate artifact manifest
+        run: pnpm release:manifest --dir dist/${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
         with:
-          name: yt-section-downloader-windows
-          path: dist/**
+          name: kawai-downloader-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/*.exe
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/*.dmg
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/*.zip
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/release-manifest.json
           if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

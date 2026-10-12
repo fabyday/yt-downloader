@@ -7,6 +7,7 @@ const rendererRoot = path.resolve(__dirname, "../build/renderer");
 const mockVideoTitle = process.env.UI_HARNESS_VIDEO_TITLE || "Mock video";
 const mockDownloadError = process.env.UI_HARNESS_DOWNLOAD_ERROR || "";
 const mockDuration = Number(process.env.UI_HARNESS_DURATION || 600);
+const mockLocale = ['en', 'ko', 'ja'].includes(process.env.UI_HARNESS_LOCALE) ? process.env.UI_HARNESS_LOCALE : 'en';
 let queueState = null;
 let lastRequest = null;
 
@@ -21,13 +22,14 @@ const mockBridge = `(() => {
   let tabSequence = 1;
   let tabs = [{ id: "tab-1", title: ${JSON.stringify(mockVideoTitle)}, active: true }];
   let preferences = {
+    hardwareAcceleration: true,
     automaticUpdates: true,
     defaultDownloadQuality: "best",
     defaultEncodingPreset: "youtube-copy",
     defaultOutputDir: "C:\\Downloads",
     defaultSpeedLimit: "",
     frameRate: 30,
-    locale: "en",
+    locale: ${JSON.stringify(mockLocale)},
     seekLargeSeconds: 10,
     seekSmallSeconds: 1
   };
@@ -102,7 +104,9 @@ const mockBridge = `(() => {
   }
 
   class MockPlayer {
+    destroy() { window.playerRecreated = (window.playerRecreated || 0) + 1; }
     constructor(_elementId, options) {
+      window.mockPlayer = this;
       this.options = options;
       this.videoId = options.videoId;
       this.currentTime = 0;
@@ -157,14 +161,25 @@ const mockBridge = `(() => {
 
   window.YT = { Player: MockPlayer, PlayerState: { PLAYING: 1 } };
   window.ytClipper = {
+    getBrowserProfiles: async ({browser}) => ({supported:!['safari','opera'].includes(browser),profiles:browser==='chrome'?[{value:'Default',label:'Personal (Default)'},{value:'Profile 1',label:'Work (Profile 1)'}]:[]}),
+    resolvePreview: async () => window.mockPreviewResult || ({ok:false,error:'preview.expired'}),
     getCookieStatus: async () => ({ ...cookieStatus }),
+    openCookiePermissionSettings: async () => {},
+    requestCookieAccess: async () => {},
+    onCookiesChanged: handler => {
+      window.cookieListeners ||= new Set();
+      window.cookieListeners.add(handler);
+      return () => window.cookieListeners.delete(handler);
+    },
+    getBrowserCookieStatus: async () => ({ running: false }),
     importCookies: async () => (cookieStatus = { configured: true, count: 3 }),
     importBrowserCookies: async () => (cookieStatus = { configured: true, count: 3 }),
     clearCookies: async () => (cookieStatus = { configured: false, count: 0 }),
     getYtDlpUpdateStatus: async () => ({ status: "current", version: "2026.10.01" }),
+    checkYtDlpUpdate: async () => { window.__ytDlpUpdateChecks = (window.__ytDlpUpdateChecks || 0) + 1; return { status: "current", version: "2026.10.01" }; },
     getDependencyStatus: async () => ({
-      ytDlp: { available: true, command: "mock", version: "mock" },
-      ffmpeg: { available: true, command: "mock", version: "mock" }
+      ytDlp: { available: true, command: "mock", version: "2026.08.19" },
+      ffmpeg: { available: true, command: "mock", version: "ffmpeg version 7.1-tessus https://evermeet.cx/ffmpeg/ Copyright (c) 2000-2024" }
     }),
     selectOutputDir: async () => "C:\\\\Downloads",
     enqueueDownload: async (item) => {
@@ -349,6 +364,11 @@ const server = http.createServer((request, response) => {
   }
 
   const requestUrl = new URL(request.url || "/", `http://127.0.0.1:${port}`);
+  if (requestUrl.pathname === '/preview-fixture.mp4' && process.env.UI_HARNESS_MEDIA_FIXTURE) {
+    response.writeHead(200, {'Content-Type':'video/mp4'});
+    fs.createReadStream(process.env.UI_HARNESS_MEDIA_FIXTURE).pipe(response);
+    return;
+  }
   const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
   const filePath = path.resolve(rendererRoot, `.${pathname}`);
   if (!filePath.startsWith(rendererRoot) || !fs.existsSync(filePath)) {
@@ -359,6 +379,7 @@ const server = http.createServer((request, response) => {
 
   let content = fs.readFileSync(filePath);
   if (pathname === "/index.html") {
+    if (process.env.UI_HARNESS_MEDIA_FIXTURE) content = Buffer.from(content.toString('utf8').replace('media-src ', "media-src 'self' "));
     content = Buffer.from(
       content.toString("utf8").replace(
         '<script src="./app.js"></script>',

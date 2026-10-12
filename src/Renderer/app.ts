@@ -7,9 +7,15 @@ import type {
   DownloadRequest,
   DownloadSegment,
   EditorSnapshot,
+  PreviewResult,
   RendererViewMode
 } from "../Shared/types";
-import { isSupportedYouTubeUrl } from "../Shared/YouTubeSource";
+import { parseVideoSource, isChzzkLiveUrl } from "../Shared/VideoSource";
+import { movePlayhead, type SelectionMode } from "../Shared/selectionMode";
+import { editMarker, sameSegment, type MarkerEdit } from "../Shared/markerRules";
+import { EXTRA_PRESETS, DEFAULT_CUSTOM_ARGS, customEncodingPreset } from "../Shared/encoding";
+import { NativePreview } from "./NativePreview";
+import { SHORTCUT_ACTIONS, shortcutFromEvent, platformShortcut } from "../Shared/shortcuts";
 import {
   DEFAULT_APP_PREFERENCES,
   normalizeAppPreferences,
@@ -27,13 +33,18 @@ import {
   setDownloadSegmentViewItems,
   setPresetDetails,
   setPresetFormats,
+  setPreviewMessage,
+  setSelectionModeView,
   setQueueViewItems,
   setSegmentViewItems,
+  showSegmentNotice,
   setTimelineRulerViewItems,
   setTimelineSegmentViewItems
 } from "./viewStore";
 
 const LOOP_EPSILON = 0.05;
+// Shared by the YouTube iframe and the native preview adapter.
+const PLAYER_PLAYING = 1;
 const SEEK_SETTLE_EPSILON = 0.35;
 const SEEK_SETTLE_TIMEOUT_MS = 1200;
 const MARKER_PLAYHEAD_EPSILON = 0.01;
@@ -88,6 +99,7 @@ interface PendingPlayerRequest {
 }
 
 interface RendererState {
+  selectionMode: SelectionMode;
   player: YouTubePlayer | null;
   playerReady: boolean;
   currentTime: number;
@@ -105,6 +117,7 @@ interface RendererState {
   loopEnabled: boolean;
   isScrubbing: boolean;
   draggingMarker: MarkerKind | null;
+  markerAttachedPlayhead: MarkerKind | null;
   timelineInteraction: TimelineInteraction;
   pendingSeekTime: number | null;
   pendingSeekStartedAt: number;
@@ -121,6 +134,9 @@ interface RendererState {
 }
 
 const OUTPUT_PRESETS: OutputPreset[] = [
+  ...EXTRA_PRESETS.map(preset => ({ id: preset.id, nameKey: null, fallbackName: preset.name,
+    extension: preset.extension, container: preset.extension.toUpperCase(), videoKey: null,
+    fallbackVideo: preset.args.join(" "), audioKey: null, fallbackAudio: "", targetKey: "encoding.output" })),
   {
     id: "youtube-copy",
     nameKey: "preset.youtubeCopy.name",
@@ -172,6 +188,7 @@ const OUTPUT_PRESETS: OutputPreset[] = [
 ];
 
 const state: RendererState = {
+  selectionMode: "free",
   player: null,
   playerReady: false,
   currentTime: 0,
@@ -189,6 +206,7 @@ const state: RendererState = {
   loopEnabled: false,
   isScrubbing: false,
   draggingMarker: null,
+  markerAttachedPlayhead: null,
   timelineInteraction: null,
   pendingSeekTime: null,
   pendingSeekStartedAt: 0,
@@ -238,6 +256,9 @@ function collectElements() {
   currentTimeHandle: getElement<HTMLButtonElement>("#currentTimeHandle"),
   startMarkerHandle: getElement<HTMLButtonElement>("#startMarkerHandle"),
   endMarkerHandle: getElement<HTMLButtonElement>("#endMarkerHandle"),
+  markerSplitTags: getElement<HTMLElement>("#markerSplitTags"),
+  splitStartMarker: getElement<HTMLButtonElement>("#splitStartMarker"),
+  splitEndMarker: getElement<HTMLButtonElement>("#splitEndMarker"),
   startTime: getElement<HTMLElement>("#startTime"),
   endTime: getElement<HTMLElement>("#endTime"),
   rangeSummary: getElement<HTMLElement>("#rangeSummary"),
@@ -335,6 +356,20 @@ async function initializeRenderer(): Promise<void> {
   startTicker();
   initializeDownloadQueue();
   window.ytClipper.onPreferencesChanged(applyPreferences);
+  void window.ytClipper.getCookieStatus().then(status => { previewCookiesConfigured = status.sites?.youtube?.configured ?? status.configured; }).catch(() => {});
+  window.ytClipper.onCookiesChanged?.((status) => {
+    previewCookiesConfigured = status.sites?.youtube?.configured ?? status.configured;
+    previewSources.clear();
+    const videoId = state.expectedVideoId;
+    if (!videoId) return;
+    const snapshot = captureEditorSnapshot(state.segments);
+    // Recreate only the cross-origin player, not the editor/preferences screen.
+    // A fresh iframe re-reads cookies; cueing the same ID can reuse old auth.
+    state.player?.destroy();
+    state.player = null;
+    state.playerReady = false;
+    createOrLoadPlayer(videoId, null, snapshot);
+  });
   window.addEventListener(LOCALE_CHANGE_EVENT, handleLocaleChange);
 }
 
@@ -343,6 +378,9 @@ void initializeRenderer().catch((error) => {
 });
 
 function bindEvents() {
+  for (const mode of ["clamp", "follow", "free"] as const) {
+    document.getElementById(`selectionMode-${mode}`)?.addEventListener("click", () => changeSelectionMode(mode));
+  }
   elements.loadButton.addEventListener("click", loadVideoFromInput);
   elements.urlInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -356,6 +394,8 @@ function bindEvents() {
   elements.addSegmentButton.addEventListener("click", addSegmentFromSelection);
   elements.clearSegmentsButton.addEventListener("click", clearSegments);
   elements.encodingPresetSelect.addEventListener("change", renderEncodingPresetDetails);
+  document.getElementById("encodingModeSelect")?.addEventListener("change", renderEncodingPresetDetails);
+  document.getElementById("customExtensionSelect")?.addEventListener("change", renderEncodingPresetDetails);
   elements.playPauseButton.addEventListener("click", togglePlayback);
   elements.playerStage.addEventListener("click", togglePlayback);
   elements.playerStage.addEventListener("keydown", (event) => {
@@ -378,12 +418,7 @@ function bindEvents() {
     seekRelative(state.preferences.seekLargeSeconds),
   );
   elements.timelineInput.addEventListener("pointerdown", (event) => {
-    if (state.timelineInteraction !== null) {
-      return;
-    }
-    state.timelineInteraction = "scrub";
-    state.isScrubbing = true;
-    seekTimelineFromPointer(event, true);
+    beginTimelineSurfaceDrag(event, elements.timelineInput);
   });
   elements.timelineInput.addEventListener("input", scrubTimeline);
   elements.timelineInput.addEventListener("change", finishTimelineScrub);
@@ -417,6 +452,10 @@ function bindEvents() {
   elements.endMarkerHandle.addEventListener("pointerdown", (event) => {
     beginMarkerDrag(event, "end");
   });
+  for (const [tag, kind] of [[elements.splitStartMarker, "start"], [elements.splitEndMarker, "end"]] as const) {
+    tag.addEventListener("pointerdown", event => beginMarkerDrag(event, kind, true));
+    tag.addEventListener("keydown", event => handleTimeDragKey(event, kind));
+  }
   elements.currentTime.addEventListener("pointerdown", (event) => {
     beginTimeReadoutDrag(event, "playback");
   });
@@ -450,7 +489,25 @@ function bindEvents() {
     void downloadSection().catch(handleRendererRequestError);
   });
   window.ytClipper.onDownloadQueueChanged(applyDownloadQueueSnapshot);
-  window.addEventListener("keydown", handleShortcuts);
+  // App bindings take precedence over focused buttons/sliders and their native
+  // activation. Text editing, menus and modal shortcut recording remain scoped.
+  window.addEventListener("keydown", (event) => updateTimelineZoomHint(event.altKey), true);
+  window.addEventListener("keyup", (event) => updateTimelineZoomHint(event.altKey), true);
+  // Recover the modifier state if Alt was pressed/released in another window.
+  window.addEventListener("pointermove", (event) => updateTimelineZoomHint(event.altKey), { passive: true });
+  window.addEventListener("keydown", handleShortcuts, true);
+  window.addEventListener("keyup", (event) => {
+    if (!consumedShortcutKeys.delete(event.code || event.key)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  window.addEventListener("blur", () => {
+    consumedShortcutKeys.clear();
+    updateTimelineZoomHint(false);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) updateTimelineZoomHint(false);
+  });
 }
 
 async function selectOutputDirectory(): Promise<void> {
@@ -551,7 +608,7 @@ function renderDependency(
   element.classList.toggle("ready", status.available);
   element.classList.toggle("missing", !status.available);
   const text = status.available
-    ? `${name}: ${status.version}`
+    ? `${name}: ${name === "ffmpeg" ? (status.version ?? "?").replace(/^ffmpeg version\s+/i, "").split(/\s+(?:Copyright|https?:\/\/|www\.)/)[0].trim() : status.version}`
     : status.reason === "outdated"
       ? t("dependency.outdated", {
           name,
@@ -567,7 +624,7 @@ function renderDependency(
     element.textContent = text;
   }
 
-  element.title = text;
+  element.title = status.available ? `${name}: ${status.version}` : text;
 }
 
 function renderEncodingPresetOptions(): void {
@@ -580,12 +637,20 @@ function renderEncodingPresetOptions(): void {
   );
 }
 
+function getEncodingRequestOptions(): Pick<DownloadRequest, "encodingPreset" | "customFfmpegArgs" | "customExtension"> {
+  const preset = getSelectedOutputPreset();
+  return preset.id === "custom" ? { encodingPreset: "custom", customExtension: preset.extension,
+    customFfmpegArgs: (document.getElementById("customFfmpegArgs") as HTMLTextAreaElement).value }
+    : { encodingPreset: preset.id };
+}
+
 function renderEncodingPresetDetails(): void {
   const preset = getSelectedOutputPreset();
 
   setPresetDetails({
     title: `${getPresetName(preset)} -> .${preset.extension}`,
-    meta: `${t(preset.targetKey)} | ${preset.container} / ${getPresetVideo(preset)} / ${getPresetAudio(preset)}`
+    meta: preset.id === "custom" ? `${preset.extension.toUpperCase()} · ${t("encoding.options")}` :
+      `${t(preset.targetKey)} | ${[preset.container, getPresetVideo(preset), getPresetAudio(preset)].filter(Boolean).join(" / ")}`
   });
 }
 
@@ -602,9 +667,14 @@ function getPresetAudio(preset: OutputPreset): string {
 }
 
 function getSelectedOutputPreset(): OutputPreset {
+  if ((document.getElementById("encodingModeSelect") as HTMLButtonElement)?.value === "custom") {
+    return { id: "custom", nameKey: "encoding.custom", fallbackName: "Custom FFmpeg",
+      extension: (document.getElementById("customExtensionSelect") as HTMLButtonElement).value,
+      container: "FFmpeg", videoKey: null, fallbackVideo: "", audioKey: null, fallbackAudio: "", targetKey: "encoding.help" };
+  }
   return (
     OUTPUT_PRESETS.find((preset) => preset.id === elements.encodingPresetSelect.value) ||
-    OUTPUT_PRESETS[0]
+    OUTPUT_PRESETS.find(preset => preset.id === "youtube-copy")!
   );
 }
 
@@ -619,6 +689,8 @@ function loadYouTubeApi(): void {
 }
 
 window.onYouTubeIframeAPIReady = () => {
+  // An already-started native preview must not be replaced by a late API load.
+  if (fallbackGeneration === previewGeneration) return;
   if (state.pendingPlayerRequest) {
     const request = state.pendingPlayerRequest;
     state.pendingPlayerRequest = null;
@@ -630,17 +702,18 @@ window.onYouTubeIframeAPIReady = () => {
     return;
   }
 
-  const pendingLink = parseYouTubeLink(elements.urlInput.value);
+  const pendingLink = parseSourceLink(elements.urlInput.value);
   if (pendingLink.videoId) {
     createOrLoadPlayer(pendingLink.videoId, pendingLink.timeRange);
   }
 };
 
 function loadVideoFromInput(): void {
-  const link = parseYouTubeLink(elements.urlInput.value);
+  if (elements.loadButton.disabled) return;
+  const link = parseSourceLink(elements.urlInput.value);
   const videoId = link.videoId;
   if (!videoId) {
-    setProgressLabel(t("status.invalidUrl"));
+    setProgressLabel(t(isChzzkLiveUrl(elements.urlInput.value) ? "preview.liveUnsupported" : "status.invalidUrl"));
     return;
   }
 
@@ -648,7 +721,66 @@ function loadVideoFromInput(): void {
   createOrLoadPlayer(videoId, link.timeRange);
   updateDownloadButtonLabel();
   if (!elements.basenameInput.value.trim()) {
-    elements.basenameInput.value = `clip-${videoId}`;
+    elements.basenameInput.value = `clip-${videoId.replace(":", "-")}`;
+  }
+}
+
+let previewGeneration = 0;
+let fallbackGeneration = -1;
+let previewCookiesConfigured = false;
+const nativePreviewVideos = new Set<string>();
+const previewSources = new Map<string, { result: Extract<PreviewResult, { ok: true }>; expires: number }>();
+
+function ensurePlayerPlaceholder(): void {
+  if (document.getElementById("player")) return;
+  const placeholder = document.createElement("div");
+  placeholder.id = "player";
+  elements.playerStage.querySelector(".player-viewport")?.prepend(placeholder);
+}
+
+async function loadAuthenticatedPreview(videoId: string, generation: number): Promise<void> {
+  if (generation !== previewGeneration || fallbackGeneration === generation) return;
+  fallbackGeneration = generation;
+  nativePreviewVideos.add(videoId);
+  state.playerReady = false;
+  state.playbackAllowed = false;
+  // The hidden iframe must not keep playing audio while extraction is pending.
+  state.player?.pauseVideo();
+  state.player?.destroy();
+  state.player = null;
+  state.pendingPlayerRequest = null;
+  ensurePlayerPlaceholder();
+  setPreviewMessage("preview.checking");
+  try {
+    const cached = previewSources.get(videoId);
+    const result = cached && cached.expires > Date.now() ? cached.result : await window.ytClipper.resolvePreview(videoId);
+    if (generation !== previewGeneration) return;
+    if (!result.ok) { setPreviewMessage(result.error); setProgressLabel(t(result.error)); return; }
+    if (!cached || cached.expires <= Date.now()) {
+      if (previewSources.size >= 8) previewSources.delete(previewSources.keys().next().value!);
+      previewSources.set(videoId, { result, expires: Date.now() + 60_000 });
+    }
+    ensurePlayerPlaceholder();
+    state.player = new NativePreview(result, () => {
+      if (generation !== previewGeneration) return;
+      state.playerReady = true;
+      state.playbackAllowed = false;
+      setPreviewMessage(null);
+      updateDuration();
+      updateVideoMeta();
+      updatePlaybackButton();
+      renderTimeline();
+      setProgressLabel(t("status.previewReady"));
+    }, handlePlayerStateChange, () => {
+      if (generation !== previewGeneration) return;
+      previewSources.delete(videoId);
+      state.playerReady = false;
+      setPreviewMessage("preview.streamFailed");
+      setProgressLabel(t("preview.streamFailed"));
+    });
+    setPreviewMessage("preview.loading");
+  } catch {
+    if (generation === previewGeneration) setPreviewMessage("preview.failed");
   }
 }
 
@@ -657,21 +789,35 @@ function createOrLoadPlayer(
   initialRange: LinkTimeRange | null = null,
   editorRestore: EditorSnapshot | null = null
 ): void {
+  const generation = ++previewGeneration;
+  setPreviewMessage(null);
   resetMarkers();
   state.pendingLinkRange = initialRange;
   state.pendingEditorRestore = editorRestore;
   state.expectedVideoId = videoId;
   elements.playerStage.classList.add("has-video");
 
-  if (state.player?.cueVideoById) {
-    state.playerReady = false;
-    state.player.cueVideoById(videoId);
-    window.setTimeout(() => {
-      updateVideoMeta();
-      updatePlaybackButton();
-    }, 200);
+  if (state.player) {
+    state.player.destroy();
+    state.player = null;
+  }
+  ensurePlayerPlaceholder();
+  state.playerReady = false;
+  if (videoId.startsWith("chzzk:") || nativePreviewVideos.has(videoId)) {
+    void loadAuthenticatedPreview(videoId, generation);
     return;
   }
+  // With imported credentials, start the authenticated path promptly when the
+  // embed gives no metadata. Ordinary ready embeds stay on their existing path.
+  window.setTimeout(() => {
+    if (generation === previewGeneration && previewCookiesConfigured && state.duration === 0) {
+      void loadAuthenticatedPreview(videoId, generation);
+    }
+  }, 2000);
+  // Some private embeds report ready but never expose metadata or an error.
+  window.setTimeout(() => {
+    if (generation === previewGeneration && state.duration === 0) void loadAuthenticatedPreview(videoId, generation);
+  }, 15_000);
 
   if (!window.YT?.Player) {
     state.pendingPlayerRequest = { videoId, initialRange, editorRestore };
@@ -698,12 +844,13 @@ function createOrLoadPlayer(
     },
     events: {
       onReady: () => {
+        if (generation !== previewGeneration || fallbackGeneration === generation) return;
         state.playerReady = true;
         state.playbackAllowed = false;
         const readyPlayer = state.player;
         if (
           readyPlayer &&
-          readyPlayer.getPlayerState() === window.YT?.PlayerState.PLAYING
+          readyPlayer.getPlayerState() === PLAYER_PLAYING
         ) {
           readyPlayer.pauseVideo();
         }
@@ -713,7 +860,10 @@ function createOrLoadPlayer(
         renderTimeline();
         setProgressLabel(t("status.previewReady"));
       },
-      onStateChange: handlePlayerStateChange
+      onStateChange: () => {
+        if (generation === previewGeneration && fallbackGeneration !== generation) handlePlayerStateChange();
+      },
+      onError: () => { void loadAuthenticatedPreview(videoId, generation); }
     }
   });
 }
@@ -733,6 +883,7 @@ function resetMarkers(): void {
   state.highlightedSegmentId = null;
   state.isScrubbing = false;
   state.draggingMarker = null;
+  state.markerAttachedPlayhead = null;
   state.timelineInteraction = null;
   state.pendingSeekTime = null;
   state.pendingSeekStartedAt = 0;
@@ -780,11 +931,14 @@ function startTicker(): void {
 function handlePlaybackRangeBoundary(playerTime: number): boolean {
   const range = getActivePlaybackRange();
   const player = state.player;
+  if (state.selectionMode === "follow" && state.pendingSeekTime === null && player?.getPlayerState() === PLAYER_PLAYING) {
+    constrainPlayhead(playerTime);
+  }
   if (
     !range ||
     !player ||
     state.pendingSeekTime !== null ||
-    player.getPlayerState() !== window.YT?.PlayerState.PLAYING ||
+    player.getPlayerState() !== PLAYER_PLAYING ||
     playerTime < range.end - LOOP_EPSILON
   ) {
     return false;
@@ -809,6 +963,7 @@ function handlePlaybackRangeBoundary(playerTime: number): boolean {
 
 function getActivePlaybackRange(): { start: number; end: number } | null {
   if (
+    state.selectionMode !== "clamp" ||
     state.rangeIsDefault ||
     state.startTime === null ||
     state.endTime === null ||
@@ -829,17 +984,9 @@ function setMarker(kind: MarkerKind): void {
   state.rangeIsDefault = false;
   state.pendingLinkRange = null;
   const current = getCurrentTimelineTime();
-  if (kind === "start") {
-    state.startTime = current;
-    elements.startTime.textContent = formatTime(current);
-    if (state.endTime !== null && state.endTime <= current) {
-      state.endTime = null;
-      elements.endTime.textContent = "--:--.---";
-    }
-  } else {
-    state.endTime = current;
-    elements.endTime.textContent = formatTime(current);
-  }
+  const range = editMarker(kind, current, state.duration, state.startTime, state.endTime, "place");
+  state.startTime = range.start;
+  state.endTime = range.end;
 
   syncRangeDisplay();
   renderTimeline();
@@ -878,7 +1025,7 @@ function applyLinkTimeRange(range: LinkTimeRange | null): boolean {
   }
 
   const start = clampTime(range.start ?? 0);
-  const end = clampTime(range.end ?? state.duration);
+  const end = state.duration;
 
   if (end <= start) {
     applyFullVideoRange();
@@ -898,11 +1045,7 @@ function applyLinkTimeRange(range: LinkTimeRange | null): boolean {
     seekToTimelineTime(start, true);
   }
 
-  setProgressLabel(
-    range.end === null
-      ? t("status.linkStartApplied")
-      : t("status.linkRangeApplied")
-  );
+  setProgressLabel(t("status.linkStartApplied"));
   return true;
 }
 
@@ -914,7 +1057,8 @@ function applyEditorSnapshot(snapshot: EditorSnapshot): void {
       end: clampTime(segment.end),
       key: segment.key || createSegmentKey(segment.start, segment.end)
     }))
-    .filter((segment) => segment.end > segment.start);
+    .filter((segment) => segment.end > segment.start)
+    .filter((segment, index, all) => !all.slice(0, index).some(previous => sameSegment(previous, segment)));
 
   state.segments = restoredSegments.map((segment, index) => ({
     ...segment,
@@ -928,7 +1072,7 @@ function applyEditorSnapshot(snapshot: EditorSnapshot): void {
   if (
     state.startTime === null ||
     state.endTime === null ||
-    state.endTime <= state.startTime
+    state.endTime < state.startTime
   ) {
     const firstSegment = state.segments[0];
     if (firstSegment) {
@@ -964,7 +1108,7 @@ function syncRangeDisplay(): void {
   if (
     state.startTime !== null &&
     state.endTime !== null &&
-    state.endTime > state.startTime
+    state.endTime >= state.startTime
   ) {
     const label = state.rangeIsDefault
       ? t("range.fullVideo")
@@ -981,6 +1125,10 @@ function syncRangeDisplay(): void {
 function addSegmentFromSelection(): void {
   const segment = getSelectionSegment();
   if (!segment) {
+    return;
+  }
+  if (state.segments.some(existing => sameSegment(existing, segment))) {
+    showSegmentNotice("segments.duplicate");
     return;
   }
 
@@ -1057,7 +1205,7 @@ function pauseForProgrammaticSeek(): void {
   state.playbackAllowed = false;
   if (
     state.player &&
-    state.player.getPlayerState() === window.YT?.PlayerState.PLAYING
+    state.player.getPlayerState() === PLAYER_PLAYING
   ) {
     state.player.pauseVideo();
   }
@@ -1083,6 +1231,7 @@ function getSelectionSegment(): DownloadSegment | null {
 
   if (state.endTime <= state.startTime) {
     setProgressLabel(t("status.endAfterStart"));
+    showSegmentNotice("status.endAfterStart");
     return null;
   }
 
@@ -1187,7 +1336,7 @@ function togglePlayback(): void {
   }
 
   const playerState = state.player.getPlayerState();
-  if (playerState === window.YT?.PlayerState.PLAYING) {
+  if (playerState === PLAYER_PLAYING) {
     state.playbackAllowed = false;
     state.player.pauseVideo();
   } else {
@@ -1196,10 +1345,11 @@ function togglePlayback(): void {
     if (
       range &&
       (current < range.start - LOOP_EPSILON ||
-        current >= range.end - LOOP_EPSILON)
+        (state.loopEnabled && current >= range.end - LOOP_EPSILON))
     ) {
       requestTimelineSeek(range.start, true, true);
     }
+    if (range && !state.loopEnabled && current >= range.end - LOOP_EPSILON) return;
     state.playbackAllowed = true;
     state.player.playVideo();
   }
@@ -1215,7 +1365,7 @@ function handlePlayerStateChange(): void {
   const activePlayer = state.player;
   if (
     activePlayer &&
-    activePlayer.getPlayerState() === window.YT?.PlayerState.PLAYING &&
+    activePlayer.getPlayerState() === PLAYER_PLAYING &&
     !state.playbackAllowed
   ) {
     activePlayer.pauseVideo();
@@ -1233,7 +1383,7 @@ function updatePlaybackButton(): void {
   }
 
   const playerState = state.player.getPlayerState();
-  const playing = playerState === window.YT?.PlayerState.PLAYING;
+  const playing = playerState === PLAYER_PLAYING;
   elements.playPauseButton.textContent = playing
     ? t("playback.pause")
     : t("playback.play");
@@ -1357,6 +1507,7 @@ function beginTimeReadoutDrag(event: PointerEvent, kind: TimeDragKind): void {
   const dragWidth = Math.max(1, elements.timelineShell.clientWidth);
   const timelineSpan = getTimelineViewport().span;
   state.timelineInteraction = "readout";
+  state.markerAttachedPlayhead = null;
   if (kind === "playback") {
     state.isScrubbing = true;
   } else {
@@ -1366,16 +1517,19 @@ function beginTimeReadoutDrag(event: PointerEvent, kind: TimeDragKind): void {
   capturePointer(target, event.pointerId);
 
   const move = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return;
     const delta = ((moveEvent.clientX - initialClientX) / dragWidth) * timelineSpan;
     applyTimeDragValue(kind, initialTime + delta, false);
   };
   const stop = (stopEvent: PointerEvent) => {
+    if (stopEvent.pointerId !== event.pointerId) return;
     releasePointerCapture(target, stopEvent.pointerId);
     target.classList.remove("dragging");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
     applyTimeDragValue(kind, getTimeDragValue(kind), true);
+    state.markerAttachedPlayhead = null;
     state.isScrubbing = false;
     state.draggingMarker = null;
     state.timelineInteraction = null;
@@ -1409,7 +1563,8 @@ function handleTimeDragKey(event: KeyboardEvent, kind: TimeDragKind): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  applyTimeDragValue(kind, next, true);
+  if (kind === "playback") applyTimeDragValue(kind, next, true);
+  else updateMarkerTime(kind, next, true, "place");
 }
 
 function getTimeDragValue(kind: TimeDragKind): number {
@@ -1446,7 +1601,14 @@ function seekTimelineFromSurfaceClientX(
   );
 }
 
+function updateTimelineZoomHint(altPressed: boolean): void {
+  const active = altPressed && state.duration > 0 &&
+    !document.querySelector('[role="dialog"][aria-modal="true"]');
+  elements.timelineShell.closest(".timeline-panel")?.classList.toggle("alt-zoom-active", active);
+}
+
 function handleTimelineWheel(event: WheelEvent): void {
+  updateTimelineZoomHint(event.altKey);
   if (!event.altKey || state.duration <= 0) {
     return;
   }
@@ -1545,7 +1707,7 @@ function capturePointer(target: HTMLElement, pointerId: number): void {
   }
 }
 
-function beginMarkerDrag(event: PointerEvent, marker: MarkerKind): void {
+function beginMarkerDrag(event: PointerEvent, marker: MarkerKind, relative = false): void {
   if (
     event.button !== 0 ||
     !state.playerReady ||
@@ -1559,29 +1721,39 @@ function beginMarkerDrag(event: PointerEvent, marker: MarkerKind): void {
   event.stopPropagation();
   state.timelineInteraction = "marker";
   state.draggingMarker = marker;
+  state.markerAttachedPlayhead = null;
   const target = event.currentTarget as HTMLButtonElement;
   target.classList.add("dragging");
   capturePointer(target, event.pointerId);
 
+  const initialTime = getTimeDragValue(marker);
+  const initialX = event.clientX;
+  const secondsPerPixel = getTimelineViewport().span / Math.max(1, elements.timelineInput.clientWidth);
+
   const move = (moveEvent: PointerEvent) => {
-    updateMarkerFromPointer(marker, moveEvent.clientX);
+    if (moveEvent.pointerId !== event.pointerId) return;
+    if (relative) updateMarkerTime(marker, initialTime + (moveEvent.clientX - initialX) * secondsPerPixel, false);
+    else updateMarkerFromPointer(marker, moveEvent.clientX);
   };
 
   const stop = (stopEvent: PointerEvent) => {
+    if (stopEvent.pointerId !== event.pointerId) return;
     releasePointerCapture(target, stopEvent.pointerId);
     target.classList.remove("dragging");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
     window.removeEventListener("pointercancel", stop);
     updateMarkerTime(marker, getTimeDragValue(marker), true);
+    state.markerAttachedPlayhead = null;
     state.draggingMarker = null;
     state.timelineInteraction = null;
+    renderMarkerOverlap();
   };
 
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", stop);
   window.addEventListener("pointercancel", stop);
-  updateMarkerFromPointer(marker, event.clientX);
+  if (!relative) updateMarkerFromPointer(marker, event.clientX);
 }
 
 function updateMarkerFromPointer(marker: MarkerKind, clientX: number): void {
@@ -1592,29 +1764,29 @@ function updateMarkerFromPointer(marker: MarkerKind, clientX: number): void {
 function updateMarkerTime(
   marker: MarkerKind,
   time: number,
-  forceSeek: boolean
+  forceSeek: boolean,
+  intent: MarkerEdit = "drag"
 ): void {
   const previous = marker === "start" ? state.startTime : state.endTime;
   const playhead = getDisplayedTimelineTime();
-  let next = clampTime(time);
+  const next = clampTime(time);
   state.rangeIsDefault = false;
   state.pendingLinkRange = null;
 
-  if (marker === "start") {
-    if (state.endTime !== null) {
-      next = Math.min(next, Math.max(0, state.endTime - 0.01));
-    }
-    state.startTime = next;
-    elements.startTime.textContent = formatTime(next);
-  } else {
-    if (state.startTime !== null) {
-      next = Math.max(next, state.startTime + 0.01);
-    }
-    state.endTime = next;
-    elements.endTime.textContent = formatTime(next);
-  }
+  const range = editMarker(marker, next, state.duration, state.startTime, state.endTime, intent);
+  state.startTime = range.start;
+  state.endTime = range.end;
 
-  if (shouldMovePlayheadWithMarker(marker, previous, next, playhead)) {
+  if (state.selectionMode === "clamp" &&
+      (state.markerAttachedPlayhead === marker || shouldMovePlayheadWithMarker(marker, previous, next, playhead))) {
+    if (intent === "drag" && state.draggingMarker === marker && state.markerAttachedPlayhead === null) {
+      // Keep ownership until pointer release: player acknowledgements can lag behind
+      // the pointer, and looping at the end would otherwise send it to the start.
+      state.markerAttachedPlayhead = marker;
+      state.playbackAllowed = false;
+      state.player?.pauseVideo();
+      updatePlaybackButton();
+    }
     requestTimelineSeek(next, true, forceSeek);
   }
   syncRangeDisplay();
@@ -1640,79 +1812,77 @@ function shouldMovePlayheadWithMarker(
     : previous > playhead && next <= playhead;
 }
 
+const consumedShortcutKeys = new Set<string>();
+
 function handleShortcuts(event: KeyboardEvent): void {
   if (document.querySelector('[role="dialog"][aria-modal="true"]')) {
     return;
   }
 
-  const command = event.metaKey || event.ctrlKey;
-  if (command && event.key.toLowerCase() === "l") {
+  if (event.isComposing) return;
+  const platform = new URLSearchParams(window.location.search).get("platform");
+  const isMac = platform ? platform === "darwin" : /Mac/i.test(navigator.platform);
+  const binding = shortcutFromEvent(event, isMac);
+  const action = binding && SHORTCUT_ACTIONS.find(key => platformShortcut(state.preferences.shortcuts[key], isMac) === platformShortcut(binding, isMac));
+  if (!action) return;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const input = target?.closest("input");
+  const editingText = Boolean(target?.closest("textarea, [contenteditable]:not([contenteditable='false'])") ||
+    (input && !["range", "checkbox", "radio", "button", "submit", "reset"].includes(input.type)));
+  if (target?.closest("select, [role='combobox'], [role='listbox'], [role='menu'], [role='menuitem']")) return;
+  if (editingText && (!(isMac ? event.metaKey : event.ctrlKey) ||
+    (action !== "focusUrl" && action !== "newTab"))) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  consumedShortcutKeys.add(event.code || event.key);
+  if (event.repeat && !/^(small|large|fine|frame)/.test(action)) return;
+  if (action === "focusUrl") {
     event.preventDefault();
     elements.urlInput.focus();
     elements.urlInput.select();
     return;
   }
 
-  if (command && event.key.toLowerCase() === "t") {
+  if (action === "newTab") {
     event.preventDefault();
     void window.ytClipper.createBrowserTab();
     return;
   }
 
-  if (event.target instanceof HTMLInputElement) {
-    return;
-  }
-
-  if (event.code === "Space") {
-    if (
-      event.target instanceof HTMLElement &&
-      event.target.closest("button, [role='button'], [role='combobox']")
-    ) {
-      return;
-    }
+  if (action === "playPause") {
     event.preventDefault();
     togglePlayback();
     return;
   }
 
-  if (event.key === "[" || event.key === "]") {
-    event.preventDefault();
-    seekRelative(event.key === "[" ? -0.1 : 0.1);
+  if (action === "modeClamp" || action === "modeFollow" || action === "modeFree") {
+    changeSelectionMode(action === "modeClamp" ? "clamp" : action === "modeFollow" ? "follow" : "free");
     return;
   }
 
-  if (event.key === "a" || event.key === "A") {
+  if (action === "fineBack" || action === "fineForward") {
+    event.preventDefault();
+    seekRelative(action === "fineBack" ? -0.1 : 0.1);
+    return;
+  }
+
+  if (action === "setStart") {
+    event.preventDefault();
     setMarker("start");
     return;
   }
 
-  if (event.key === "s" || event.key === "S") {
+  if (action === "setEnd") {
+    event.preventDefault();
     setMarker("end");
     return;
   }
 
-  if (event.key === "ArrowLeft") {
-    event.preventDefault();
-    if (event.altKey) seekByFrame(-1);
-    else
-      seekRelative(
-        event.shiftKey
-          ? -state.preferences.seekLargeSeconds
-          : -state.preferences.seekSmallSeconds,
-      );
-    return;
-  }
-
-  if (event.key === "ArrowRight") {
-    event.preventDefault();
-    if (event.altKey) seekByFrame(1);
-    else
-      seekRelative(
-        event.shiftKey
-          ? state.preferences.seekLargeSeconds
-          : state.preferences.seekSmallSeconds,
-      );
-  }
+  event.preventDefault();
+  const direction = action.endsWith("Back") ? -1 : 1;
+  if (action.startsWith("frame")) seekByFrame(direction);
+  else seekRelative(direction * (action.startsWith("large")
+    ? state.preferences.seekLargeSeconds : state.preferences.seekSmallSeconds));
 }
 
 async function downloadSection(): Promise<void> {
@@ -1738,11 +1908,17 @@ async function downloadSection(): Promise<void> {
     elements.basenameInput.value.trim() || `clip-${new Date().toISOString()}`;
   const preset = getSelectedOutputPreset();
   const editingItem = getEditingQueueItem();
+  if (preset.id === "custom") {
+    try { customEncodingPreset((document.getElementById("customFfmpegArgs") as HTMLTextAreaElement).value, preset.extension); }
+    catch { setProgressLabel(t("encoding.invalidOptions")); return; }
+  }
 
   if (
     editingItem &&
     extractVideoId(editingItem.payload.url) === videoId
   ) {
+    const companionRequestId = getCompanionRequestId();
+    if (companionRequestId) editingItem.companionRequestId = companionRequestId;
     await updateExistingQueueItem(editingItem, segments, basename, preset);
     return;
   }
@@ -1753,7 +1929,7 @@ async function downloadSection(): Promise<void> {
     segments,
     downloadQuality: elements.downloadQualitySelect.value,
     speedLimit: elements.speedLimitSelect.value,
-    encodingPreset: elements.encodingPresetSelect.value,
+    ...getEncodingRequestOptions(),
     basename,
     outputDir: elements.outputDirInput.value.trim(),
     locale: getLocale(),
@@ -1761,6 +1937,7 @@ async function downloadSection(): Promise<void> {
     skipSegmentKeys: [],
     keepSourceCache: true
   };
+  const companionRequestId = getCompanionRequestId();
   const item: DownloadQueueItem = {
     id: itemId,
     payload,
@@ -1779,7 +1956,8 @@ async function downloadSection(): Promise<void> {
     log: [],
     completedSegmentKeys: [],
     currentAttemptKeys: [],
-    editorSnapshot: captureEditorSnapshot(segments)
+    editorSnapshot: captureEditorSnapshot(segments),
+    ...(companionRequestId ? { companionRequestId } : {})
   };
 
   state.editingQueueItemId = item.id;
@@ -1812,7 +1990,7 @@ async function updateExistingQueueItem(
     segments: mergedSegments,
     downloadQuality: elements.downloadQualitySelect.value,
     speedLimit: elements.speedLimitSelect.value,
-    encodingPreset: elements.encodingPresetSelect.value,
+    ...getEncodingRequestOptions(),
     basename,
     outputDir: elements.outputDirInput.value.trim(),
     resumeKey: item.id,
@@ -1887,7 +2065,7 @@ function renderDownloadQueue(): void {
 }
 
 function restoreQueueItem(item: DownloadQueueItem): void {
-  const link = parseYouTubeLink(item.payload.url);
+  const link = parseSourceLink(item.payload.url);
   if (!link.videoId) {
     setProgressLabel(t("status.invalidSavedUrl"));
     return;
@@ -1906,6 +2084,9 @@ function restoreQueueItem(item: DownloadQueueItem): void {
     elements.encodingPresetSelect,
     item.payload.encodingPreset
   );
+  setRendererSelectValue(document.getElementById("encodingModeSelect") as HTMLButtonElement, item.payload.encodingPreset === "custom" ? "custom" : "preset");
+  (document.getElementById("customFfmpegArgs") as HTMLTextAreaElement).value = item.payload.customFfmpegArgs ?? DEFAULT_CUSTOM_ARGS;
+  setRendererSelectValue(document.getElementById("customExtensionSelect") as HTMLButtonElement, item.payload.customExtension ?? "mp4");
   renderEncodingPresetDetails();
 
   const snapshot = item.editorSnapshot || createSnapshotFromQueueItem(item);
@@ -2015,6 +2196,7 @@ function createQueueItemId(): string {
 }
 
 function getPresetNameById(presetId: string): string {
+  if (presetId === "custom") return t("encoding.custom");
   const preset = OUTPUT_PRESETS.find((candidate) => candidate.id === presetId);
   return preset ? getPresetName(preset) : presetId;
 }
@@ -2074,6 +2256,8 @@ function updateDuration(): void {
     return;
   }
 
+  const endWasAtVideoEnd =
+    state.endTime !== null && Math.abs(state.endTime - state.duration) < 0.01;
   state.duration = duration;
   elements.durationTime.textContent = formatTime(duration);
   elements.timelineInput.max = String(duration);
@@ -2088,6 +2272,9 @@ function updateDuration(): void {
       seekToTimelineTime(0, true);
     }
   } else {
+    // YouTube can refine the duration after the initial player-ready event.
+    // Keep an end marker at the video boundary attached to that boundary.
+    if (endWasAtVideoEnd) state.endTime = duration;
     syncRangeDisplay();
   }
   renderTimeline();
@@ -2204,6 +2391,25 @@ function renderMarkerOverlap(): void {
 
   elements.startMarkerHandle.classList.toggle("marker-overlap-start", overlap);
   elements.endMarkerHandle.classList.toggle("marker-overlap-end", overlap);
+  const draggingTag = elements.splitStartMarker.classList.contains("dragging") || elements.splitEndMarker.classList.contains("dragging");
+  elements.markerSplitTags.classList.toggle("hidden", !overlap && !draggingTag);
+  if (overlap || draggingTag) {
+    const width = elements.timelineShell.clientWidth;
+    const startWidth = elements.splitStartMarker.offsetWidth;
+    const endWidth = elements.splitEndMarker.offsetWidth;
+    // Each tag tracks its own marker, even after the markers separate. Shift
+    // inward only at viewport edges so both handles stay visible and distinct.
+    const startLeft = Math.max(0, Math.min(
+      width - startWidth - endWidth - 4,
+      width * getTimelinePercent(state.startTime ?? 0) / 100 - startWidth - 2
+    ));
+    const endLeft = Math.min(width - endWidth, Math.max(
+      startLeft + startWidth + 4,
+      width * getTimelinePercent(state.endTime ?? state.duration) / 100 + 2
+    ));
+    elements.splitStartMarker.style.left = `${startLeft}px`;
+    elements.splitEndMarker.style.left = `${endLeft}px`;
+  }
 }
 
 function renderSelectedRange(): void {
@@ -2493,7 +2699,7 @@ function requestTimelineSeek(
     return;
   }
 
-  const next = clampTime(time);
+  const next = constrainPlayhead(clampTime(time));
   beginPendingSeek(next);
 
   const now = performance.now();
@@ -2501,6 +2707,23 @@ function requestTimelineSeek(
     state.player.seekTo(next, allowSeekAhead);
     state.lastTimelineSeekAt = now;
   }
+}
+
+function changeSelectionMode(mode: SelectionMode): void {
+  state.selectionMode = mode;
+  setSelectionModeView(mode);
+  if (state.playerReady) requestTimelineSeek(getDisplayedTimelineTime(), true, true);
+}
+
+function constrainPlayhead(time: number): number {
+  const next = movePlayhead(state.selectionMode, time, state.duration, state.startTime, state.endTime);
+  if (next.start !== state.startTime || next.end !== state.endTime) {
+    state.startTime = next.start;
+    state.endTime = next.end;
+    state.rangeIsDefault = false;
+    syncRangeDisplay();
+  }
+  return next.time;
 }
 
 function beginPendingSeek(time: number): void {
@@ -2516,6 +2739,9 @@ function reconcilePendingSeek(playerTime: number): void {
   if (state.pendingSeekTime === null || !Number.isFinite(playerTime)) {
     return;
   }
+
+  // The drag is authoritative until its final forced seek on release.
+  if (state.markerAttachedPlayhead !== null) return;
 
   const settled =
     Math.abs(playerTime - state.pendingSeekTime) <= SEEK_SETTLE_EPSILON;
@@ -2548,17 +2774,23 @@ function getRendererMode(): RendererViewMode {
   return value === "shell" || value === "queue" ? value : "editor";
 }
 
-function parseYouTubeLink(input: string): {
+function getCompanionRequestId(): string | null {
+  const value = new URLSearchParams(window.location.search).get("companionRequestId");
+  return value && /^[A-Za-z0-9-]{8,100}$/.test(value) ? value : null;
+}
+
+function parseSourceLink(input: string): {
   videoId: string | null;
   timeRange: LinkTimeRange | null;
 } {
-  if (!isSupportedYouTubeUrl(input.trim())) {
+  const source = parseVideoSource(input);
+  if (!source) {
     return { videoId: null, timeRange: null };
   }
   try {
     const url = new URL(input.trim());
     return {
-      videoId: getYouTubeVideoId(url),
+      videoId: source.key,
       timeRange: getYouTubeLinkTimeRange(url)
     };
   } catch {
@@ -2567,32 +2799,7 @@ function parseYouTubeLink(input: string): {
 }
 
 function extractVideoId(input: string): string | null {
-  return parseYouTubeLink(input).videoId;
-}
-
-function getYouTubeVideoId(url: URL): string | null {
-  const host = url.hostname.replace(/^www\./, "");
-
-  if (host === "youtu.be") {
-    return url.pathname.split("/").filter(Boolean)[0] || null;
-  }
-
-  if (
-    host === "youtube.com" ||
-    host === "m.youtube.com" ||
-    host === "music.youtube.com"
-  ) {
-    if (url.pathname === "/watch") {
-      return url.searchParams.get("v");
-    }
-
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (["embed", "shorts", "live"].includes(parts[0])) {
-      return parts[1] || null;
-    }
-  }
-
-  return null;
+  return parseSourceLink(input).videoId;
 }
 
 function getYouTubeLinkTimeRange(url: URL): LinkTimeRange | null {

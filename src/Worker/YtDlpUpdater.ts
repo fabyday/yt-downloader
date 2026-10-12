@@ -39,23 +39,34 @@ interface Release {
 // background. Only a missing/outdated installation has to wait for the update.
 export function prepareYtDlpOnStartup(options: UpdateOptions): {
   getPath: () => Promise<string>;
-  finished: Promise<string>;
+  readonly finished: Promise<string>;
+  check: () => Promise<string>;
 } {
   let currentPath = options.fallbackPath;
   let resolveReady!: () => void;
   const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
-  const finished = updateYtDlpOnStartup({
-    ...options,
-    onSelected: (command, version) => {
+  let active: Promise<string> | null = null;
+  const check = (): Promise<string> => {
+    if (active) return active;
+    if (options.signal?.aborted) return Promise.resolve(currentPath);
+    active = updateYtDlpOnStartup({
+      ...options, fallbackPath: currentPath,
+      onSelected: (command, version) => {
+        currentPath = command;
+        options.onSelected?.(command, version);
+        if (version && compareVersions(version, MIN_YT_DLP_VERSION) >= 0) resolveReady();
+      },
+    }).then((command) => {
       currentPath = command;
-      if (version && compareVersions(version, MIN_YT_DLP_VERSION) >= 0) resolveReady();
-    },
-  }).then((command) => {
-    currentPath = command;
-    resolveReady();
-    return command;
-  });
-  return { getPath: async () => { await ready; return currentPath; }, finished };
+      return command;
+    }).finally(() => { active = null; resolveReady(); });
+    return active;
+  };
+  const startup = check();
+  // Unsupported/aborted startup must not leave dependency requests waiting forever.
+  void startup.finally(resolveReady).catch(() => {});
+  return { getPath: async () => { await ready; return currentPath; },
+    get finished() { return active ?? Promise.resolve(currentPath); }, check };
 }
 
 // Install outside the signed/read-only app bundle. Immutable version paths also
@@ -166,10 +177,13 @@ export async function updateYtDlpOnStartup(options: UpdateOptions): Promise<stri
     await fs.rename(stagingDirectory, installedDirectory);
     stagingDirectory = null;
     selectedPath = path.join(installedDirectory, spec.executable);
+    selectedVersion = latest;
+    options.onSelected?.(selectedPath, selectedVersion);
     log(`Installed ${latest}`);
     options.onStatus?.({ status: "updated", version: latest });
   } catch (error) {
-    options.onStatus?.({ status: "error", version: selectedVersion });
+    options.onStatus?.({ status: selectedVersion && compareVersions(selectedVersion, MIN_YT_DLP_VERSION) >= 0
+      ? "error" : "unavailable", version: selectedVersion });
     log(`Update unavailable; using ${selectedVersion ?? "the existing binary"}: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     if (stagingDirectory) await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {});

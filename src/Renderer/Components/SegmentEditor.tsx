@@ -9,9 +9,11 @@ import {
 import { useI18n } from "../I18nProvider";
 import { Caption } from "./Caption";
 import { SegmentListContent } from "./SegmentListContent";
+import { useRendererViewSnapshot } from "../viewStore";
 
 export function SegmentEditor() {
   const { t } = useI18n();
+  const { segmentNotice } = useRendererViewSnapshot();
 
   return (
     <Panel padding="sm" radius="md" className="segment-panel">
@@ -23,9 +25,6 @@ export function SegmentEditor() {
           </Text>
         </Stack>
         <Flex gap="sm" className="segment-actions">
-          <Button id="addSegmentButton" size="sm">
-            {t("segments.add")}
-          </Button>
           <Button id="clearSegmentsButton" variant="ghost" size="sm">
             {t("segments.clear")}
           </Button>
@@ -39,6 +38,9 @@ export function SegmentEditor() {
       >
         <SegmentListContent />
       </ScrollArea>
+      <div className="segment-notice" role="status" aria-live="polite" aria-atomic="true">
+        {segmentNotice && <span key={segmentNotice.revision}>{t(segmentNotice.message)}</span>}
+      </div>
     </Panel>
   );
 }

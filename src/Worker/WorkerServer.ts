@@ -3,7 +3,11 @@ import * as path from "node:path";
 import * as net from "node:net";
 import type { Socket } from "node:net";
 import type { DownloadQueueItem, YtDlpUpdateStatus, CookieStatus } from "../Shared/types";
-import type { BrowserCookieOptions } from "../Shared/cookies";
+import type { BrowserCookieOptions, CookieImportData } from "../Shared/cookies";
+import { cookieSite } from "../Shared/cookies";
+import { parseVideoSource, previewSource } from "../Shared/VideoSource";
+import { getBrowserProcessStatus } from "./BrowserProcess";
+import { listBrowserProfiles } from "./BrowserProfiles";
 import {
   encodeWorkerMessage,
   isWorkerRequestEnvelope,
@@ -18,8 +22,9 @@ import {
 import { DownloadEngine, sanitizeResumeKey } from "./DownloadEngine";
 import { DownloadQueueService } from "./DownloadQueueService";
 import { prepareYtDlpOnStartup } from "./YtDlpUpdater";
-import { CookieStore } from "./CookieStore";
+import { CookieStore, prepareCookieDirectory } from "./CookieStore";
 import { exportBrowserCookies } from "./BrowserCookies";
+import { resolvePreview } from "./PreviewResolver";
 
 interface ClientSession {
   authenticated: boolean;
@@ -35,7 +40,15 @@ export async function startWorker(): Promise<void> {
   await fs.mkdir(options.cacheDirectory, { recursive: true });
 
   const updateController = new AbortController();
-  const cookies = new CookieStore(path.join(options.stateDirectory, "cookies"));
+  const cookieDirectory = await prepareCookieDirectory(options.stateDirectory);
+  const cookies = new CookieStore(cookieDirectory);
+  const chzzkCookies = new CookieStore(cookieDirectory, "chzzk");
+  const cookieStore = (site: unknown) => cookieSite(site) === "chzzk" ? chzzkCookies : cookies;
+  const cookieStatus = async (): Promise<CookieStatus> => {
+    const [youtube, chzzk] = await Promise.all([cookies.getStatus(), chzzkCookies.getStatus()]);
+    return { configured: youtube.configured || chzzk.configured, count: youtube.count + chzzk.count,
+      sites: { youtube, chzzk }, ...(youtube.error || chzzk.error ? { error: "cookies.readFailed" as const } : {}) };
+  };
   let browserImport: Promise<CookieStatus> | null = null;
   let updateStatus: YtDlpUpdateStatus = { status: "managed", version: null };
   const ytDlpUpdate = options.ownership === "app-owned" && !process.env.YT_DLP_PATH?.trim()
@@ -53,7 +66,7 @@ export async function startWorker(): Promise<void> {
     nodeRuntimePath: options.nodeRuntimePath,
     ytDlpPath: options.ytDlpPath,
     resolveYtDlpPath: ytDlpUpdate?.getPath,
-    createCookieSnapshot: () => cookies.createSnapshot(),
+    createCookieSnapshot: url => cookieStore(parseVideoSource(url)?.site).createSnapshot(),
   });
   const clients = new Set<ClientSession>();
   let stateRevision = 0;
@@ -159,18 +172,49 @@ export async function startWorker(): Promise<void> {
       }
 
       switch (request.method) {
+        case "preview.resolve": {
+          const videoId = (request.params as { videoId?: unknown }).videoId;
+          const source = previewSource(videoId);
+          if (!source) {
+            sendResult(session.socket, request, { ok: false, error: "preview.failed" });
+            return;
+          }
+          const snapshot = await cookieStore(source.site).createSnapshot();
+          try {
+            sendResult(session.socket, request, await resolvePreview(source.key, {
+              command: await (ytDlpUpdate?.getPath() ?? Promise.resolve(options.ytDlpPath)),
+              nodeRuntimePath: options.nodeRuntimePath, cookiePath: snapshot?.path,
+              signal: updateController.signal,
+            }));
+          } finally { await snapshot?.dispose(); }
+          return;
+        }
+        case "cookies.preview":
+          sendResult(session.socket, request, await cookies.getPreviewContents());
+          return;
+        case "cookies.browser-status":
+          sendResult(session.socket, request, await getBrowserProcessStatus(request.params as BrowserCookieOptions));
+          return;
+        case "cookies.profiles":
+          sendResult(session.socket, request, await listBrowserProfiles(request.params as BrowserCookieOptions));
+          return;
+        case "cookies.import-data":
+          sendResult(session.socket, request, await cookieStore((request.params as { site?: unknown }).site).importData(request.params as CookieImportData));
+          return;
         case "cookies.status":
-          sendResult(session.socket, request, await cookies.getStatus());
+          sendResult(session.socket, request, await cookieStatus());
           return;
         case "cookies.import":
-          sendResult(session.socket, request, await cookies.import((request.params as { contents: unknown }).contents));
+          sendResult(session.socket, request, await cookieStore((request.params as { site?: unknown }).site).import((request.params as { contents: unknown }).contents));
           return;
         case "cookies.import-browser":
           if (browserImport) throw new Error("cookies.browserBusy");
-          browserImport = cookies.importFrom(async () => exportBrowserCookies({
+          if ((await getBrowserProcessStatus(request.params as BrowserCookieOptions)).running) throw new Error("cookies.browserRunning");
+          if (browserImport) throw new Error("cookies.browserBusy");
+          browserImport = cookieStore((request.params as BrowserCookieOptions).site).importFrom(async () => exportBrowserCookies({
             browser: request.params as BrowserCookieOptions,
             command: await (ytDlpUpdate?.getPath() ?? Promise.resolve(options.ytDlpPath)),
-            directory: path.join(options.stateDirectory, "cookies"),
+            directory: cookieDirectory,
             signal: updateController.signal,
           }));
           try {
@@ -180,9 +224,14 @@ export async function startWorker(): Promise<void> {
           }
           return;
         case "cookies.clear":
-          sendResult(session.socket, request, await cookies.clear());
+          sendResult(session.socket, request, await cookieStore((request.params as { site?: unknown }).site).clear());
           return;
         case "dependency.update-status":
+          sendResult(session.socket, request, updateStatus);
+          return;
+        case "dependency.update-check":
+          // Respond immediately; polling reports progress without an IPC timeout.
+          if (!shutdownPromise) void ytDlpUpdate?.check().catch(() => {});
           sendResult(session.socket, request, updateStatus);
           return;
         case "dependency.get":

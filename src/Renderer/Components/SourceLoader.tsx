@@ -4,12 +4,16 @@ import { useRendererViewSnapshot } from "../viewStore";
 
 interface SourceLoaderProps {
   downloadOpen: boolean;
+  segmentsOpen: boolean;
+  onToggleSegments: () => void;
   onOpenPreferences: () => void;
   onToggleDownload: () => void;
 }
 
 export function SourceLoader({
   downloadOpen,
+  segmentsOpen,
+  onToggleSegments,
   onOpenPreferences,
   onToggleDownload,
 }: SourceLoaderProps) {
@@ -20,7 +24,7 @@ export function SourceLoader({
   ).length;
 
   return (
-    <Grid columns={5} align="end" className="input-bar source-toolbar">
+    <Grid columns={6} align="end" className="input-bar source-toolbar">
       <Input
         id="urlInput"
         type="url"
@@ -29,7 +33,7 @@ export function SourceLoader({
         autoComplete="off"
         controlSize="lg"
       />
-      <Button id="loadButton" size="lg" className="primary-button">
+      <Button id="loadButton" size="lg" className="primary-button" disabled={downloadOpen}>
         {t("source.load")}
       </Button>
       <Button
@@ -59,6 +63,10 @@ export function SourceLoader({
         onClick={onOpenPreferences}
       >
         {t("viewer.preference")}
+      </Button>
+      <Button id="toggleSegmentListButton" size="lg" variant={segmentsOpen ? "primary" : "secondary"}
+        aria-pressed={segmentsOpen} aria-controls="segmentSidebar" disabled={downloadOpen} onClick={onToggleSegments}>
+        {t("segments.showList")}
       </Button>
     </Grid>
   );

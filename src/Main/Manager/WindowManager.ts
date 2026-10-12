@@ -13,13 +13,15 @@ import {
   type ReturnCode,
 } from "../../Common/RetCode";
 import type { BrowserTabSnapshot } from "../../Shared/types";
-import { getSourceUrlFromDeepLink } from "../ExternalProtocol";
+import { parseDownloaderDeepLink } from "../ExternalProtocol";
 import {
   getWindowChromeOptions,
   installMacWindowShortcuts,
   SHELL_CHROME_HEIGHT,
 } from "../WindowChrome";
 import { BaseManager } from "./BaseManager";
+import { CompanionManager } from "./CompanionManager";
+import { PREVIEW_PARTITION } from "../PreviewCookies";
 import { WindowReturnType } from "./ReturnTypes";
 
 const MAX_TABS = 12;
@@ -38,7 +40,10 @@ export class WindowManager extends BaseManager<WindowReturnType> {
   private readonly tabs = new Map<string, ManagedTab>();
   private tabSequence = 0;
 
-  constructor(private readonly rendererUrl: string) {
+  constructor(
+    private readonly rendererUrl: string,
+    private readonly companionManager: CompanionManager,
+  ) {
     super();
   }
 
@@ -112,7 +117,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     };
   }
 
-  createTab(sourceUrl?: string): BrowserTabSnapshot {
+  createTab(sourceUrl?: string, companionRequestId?: string): BrowserTabSnapshot {
     if (this.tabs.size >= MAX_TABS) {
       return this.getTabSnapshot();
     }
@@ -125,7 +130,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     });
     const tab: ManagedTab = {
       id,
-      title: `YouTube ${this.tabSequence}`,
+      title: `Video ${this.tabSequence}`,
       view,
     };
 
@@ -154,18 +159,20 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       this.createRendererUrl("editor", {
         tabId: id,
         ...(sourceUrl ? { sourceUrl } : {}),
+        ...(companionRequestId ? { companionRequestId } : {}),
       }),
     );
     return this.activateTab(id);
   }
 
   openExternalUrl(value: string): boolean {
-    const sourceUrl = getSourceUrlFromDeepLink(value);
-    if (!sourceUrl || !this.mainWindow || this.mainWindow.isDestroyed()) {
+    const request = parseDownloaderDeepLink(value);
+    if (!request || !this.mainWindow || this.mainWindow.isDestroyed()) {
       return false;
     }
+    this.companionManager.acceptDeepLink(request);
     this.focusMainWindow();
-    this.createTab(sourceUrl);
+    this.createTab(request.sourceUrl, request.companion?.requestId);
     return true;
   }
 
@@ -299,7 +306,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       height,
       minHeight: Math.min(720, height),
       minWidth: Math.min(1100, width),
-      title: "YT Section Downloader",
+      title: "kawai-downloader",
       webPreferences: this.createWebPreferences(),
       width,
     });
@@ -328,6 +335,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
 
   private createWebPreferences(): Electron.WebPreferences {
     return {
+      partition: PREVIEW_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "../preload/preload.js"),

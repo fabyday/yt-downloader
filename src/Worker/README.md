@@ -17,6 +17,8 @@
 - `worker.hello`
 - `worker.shutdown`
 - `dependency.get`
+- `dependency.update-status`
+- `dependency.update-check`
 - `queue.get`
 - `queue.enqueue`
 - `queue.update`
@@ -26,7 +28,43 @@
 큐 상태가 바뀌면 연결된 모든 인증 클라이언트에 `queue.changed` 이벤트가 전송됩니다.
 정확한 wire type은 `src/Shared/workerProtocol.ts`에서 관리합니다.
 
-## Ownership
+## Binary updates
+
+개발 실행·테스트는 공통 준비 스크립트가 검증한 OS/CPU별 캐시를 사용하며, 배포 앱은
+`resources/binaries/<platform>-<arch>`에 기본 바이너리를 포함합니다.
+`app-owned` Worker는 yt-dlp 업데이트를 사용자 데이터의 `binaries/yt-dlp`에 설치합니다.
+`dependency.update-check`는 재확인을 시작하고 즉시 현재 상태를 반환합니다.
+진행 중인 요청은 하나로 합쳐지며 `dependency.update-status`로 결과를 확인합니다.
+실행 중인 다운로드는 기존 바이너리를 유지하고 이후 작업부터 새 버전을 사용합니다.
+오프라인에서도 정상 캐시가 있으면 유지하며, 사용할 버전이 없으면 `unavailable`입니다.
+외부 소유 Worker 또는 명시적 `YT_DLP_PATH`는 `managed` 상태로 자동·수동 갱신을 하지 않습니다.
+FFmpeg는 시작 시 자동 갱신하지 않습니다. [빌드 문서](../../Docs/BUILD.md)를 참고하세요.
+
+## Cookie providers
+
+인증된 클라이언트는 `cookies.import-data`로 공급자와 독립적인 쿠키 데이터를 전달할 수 있습니다.
+`site: "youtube" | "chzzk"`를 함께 전달하면 해당 사이트의 쿠키 저장소만 교체합니다.
+생략 시 기존 클라이언트와 호환되도록 YouTube를 사용합니다. `cookies.import` 및
+`cookies.clear`도 같은 선택적 `site`를 받고, 브라우저 추출은 옵션에 `site`를 포함합니다.
+`cookies.status`의 `sites.youtube`/`sites.chzzk`에 개별 상태가 있으며 최상위 count는 합계입니다.
+치지직의 `loginCookiesPresent`는 NID_AUT/NID_SES 존재 여부일 뿐 서버 인증 성공은 아닙니다.
+`cookies.preview`는 계속 YouTube 쿠키만 반환합니다. 치지직 쿠키는 Worker 내부에서
+해당 사이트 미리보기 추출·다운로드용 스냅샷에만 사용합니다.
+`preview.resolve`의 videoId는 기존 YouTube ID 또는 `chzzk:숫자ID`를 받습니다.
+`{ format: "netscape", contents: "..." }` 또는
+`{ format: "records", cookies: [{ domain, path, name, value, secure, httpOnly, expirationDate }] }`
+형식을 받습니다. `expirationDate`는 Unix 초이며 생략 또는 -1은 세션 쿠키입니다.
+이는 Kawaikara의 쿠키 공급자를 연결하기 위한 입력 계약이며, 실제 Kawaikara 연동은 별도입니다.
+현재 다운로드 서비스 범위에 맞춰 YouTube/Google 도메인만 저장하고, 매 작업은 별도 스냅샷을 사용합니다.
+입력 검증 실패 시 기존 쿠키는 유지됩니다. 쿠키 값은 로그나 URL에 넣지 마세요.
+
+`cookies.browser-status`는 선택한 브라우저의 프로세스 존재 여부를 반환합니다.
+`cookies.import-browser`는 실행 중인 브라우저를 종료시키지 않고 오류로 안내합니다.
+사용자가 브라우저를 완전히 종료한 뒤 명시적으로 추출을 요청해야 합니다.
+`cookies.status`는 손상/접근 실패 시 예외 대신 `error: "cookies.readFailed"`를 반환하여
+UI에서 `cookies.clear` 또는 다시 가져오기로 복구할 수 있게 합니다.
+
+## Ownership and lifecycle
 
 Downloader가 직접 실행한 Worker는 `app-owned`입니다. Downloader PID를 감시하고
 소유 앱이 종료되면 Worker도 종료합니다.

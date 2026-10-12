@@ -5,9 +5,11 @@ import {
   Text,
 } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
+import { useRendererViewSnapshot } from "../viewStore";
 
 export function VideoPreview() {
   const { t } = useI18n();
+  const { previewMessage } = useRendererViewSnapshot();
 
   return (
     <Box className="preview-pane">
@@ -25,6 +27,9 @@ export function VideoPreview() {
             </Center>
             <Text as="span" size="sm" tone="muted">{t("video.placeholder")}</Text>
           </Center>
+          {previewMessage && <div className="preview-feedback" role="status" aria-live="polite">
+            {t(previewMessage)}
+          </div>}
         </Box>
       </AspectRatio>
     </Box>

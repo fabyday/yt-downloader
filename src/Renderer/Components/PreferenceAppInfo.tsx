@@ -61,7 +61,7 @@ export function PreferenceAppInfo({
       <Panel padding="lg" radius="md" className="app-identity-card">
         <Stack gap="xs">
           <Text size="xs" weight="semibold" className="download-eyebrow">
-            YT SECTION DOWNLOADER
+            kawai-downloader
           </Text>
           <Text size="lg" weight="semibold">
             {appInfo?.name ?? t("app.documentTitle")}

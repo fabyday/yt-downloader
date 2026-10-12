@@ -6,7 +6,7 @@ import type {
 } from "./types";
 
 export const WORKER_PROTOCOL_VERSION = 1;
-import type { BrowserCookieOptions } from "./cookies";
+import type { BrowserCookieOptions, BrowserProcessStatus, CookieImportData } from "./cookies";
 export const WORKER_MAX_MESSAGE_BYTES = 6 * 1024 * 1024;
 
 export type WorkerOwnershipMode = "app-owned" | "external-owned";
@@ -38,11 +38,17 @@ export interface WorkerHelloResult {
 }
 
 export interface WorkerRequestMap {
+  "preview.resolve": { videoId: string };
+  "cookies.preview": Record<string, never>;
+  "cookies.browser-status": BrowserCookieOptions;
+  "cookies.profiles": BrowserCookieOptions;
+  "cookies.import-data": CookieImportData & { site?: import("./cookies").CookieSite };
   "cookies.status": Record<string, never>;
-  "cookies.import": { contents: string };
+  "cookies.import": { contents: string; site?: import("./cookies").CookieSite };
   "cookies.import-browser": BrowserCookieOptions;
-  "cookies.clear": Record<string, never>;
+  "cookies.clear": { site?: import("./cookies").CookieSite };
   "dependency.update-status": Record<string, never>;
+  "dependency.update-check": Record<string, never>;
   "worker.hello": WorkerHelloParams;
   "worker.shutdown": Record<string, never>;
   "dependency.get": Record<string, never>;
@@ -58,11 +64,17 @@ export interface WorkerRequestMap {
 }
 
 export interface WorkerResponseMap {
+  "preview.resolve": import("./types").PreviewResult;
+  "cookies.preview": string | null;
+  "cookies.browser-status": BrowserProcessStatus;
+  "cookies.profiles": import("./cookies").BrowserProfileList;
+  "cookies.import-data": CookieStatus;
   "cookies.status": CookieStatus;
   "cookies.import": CookieStatus;
   "cookies.import-browser": CookieStatus;
   "cookies.clear": CookieStatus;
   "dependency.update-status": YtDlpUpdateStatus;
+  "dependency.update-check": YtDlpUpdateStatus;
   "worker.hello": WorkerHelloResult;
   "worker.shutdown": { shuttingDown: boolean };
   "dependency.get": DependencyStatuses;

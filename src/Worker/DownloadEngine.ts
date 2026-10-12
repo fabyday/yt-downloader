@@ -7,6 +7,9 @@ import * as path from "node:path";
 import { normalizeLocale, type SupportedLocale } from "../Shared/locale";
 import { translate as t } from "../Shared/nodeI18n";
 import { MIN_YT_DLP_VERSION } from "../Shared/dependencies";
+import { EXTRA_PRESETS, customEncodingPreset } from "../Shared/encoding";
+import { parseVideoSource, isChzzkLiveUrl } from "../Shared/VideoSource";
+import { ytDlpSiteArgs } from "./YtDlpPlugins";
 import type {
   CompletedDownloadSegment,
   DependencyStatus,
@@ -74,7 +77,7 @@ interface DownloadEngineOptions {
   nodeRuntimePath: string;
   ytDlpPath: string;
   resolveYtDlpPath?: () => Promise<string>;
-  createCookieSnapshot?: () => Promise<{ path: string; dispose: () => Promise<void> } | null>;
+  createCookieSnapshot?: (url: string) => Promise<{ path: string; dispose: () => Promise<void> } | null>;
 }
 
 type ProgressExtra = Omit<
@@ -93,6 +96,7 @@ const DOWNLOAD_QUALITIES = new Set([
 ]);
 const SPEED_LIMITS = new Set(["", "1M", "2M", "5M", "10M", "20M", "50M"]);
 const ENCODING_PRESETS: Record<string, EncodingPreset> = {
+  ...Object.fromEntries(EXTRA_PRESETS.map(preset => [preset.id, { ...preset, fallbackLabel: preset.name }])),
   "youtube-copy": {
     id: "youtube-copy",
     fallbackLabel: "YouTube source",
@@ -218,7 +222,7 @@ export class DownloadEngine {
       if (job.canceled) throw new Error(t(locale, "main.error.canceled"));
       await assertCommandAvailable(ytDlpPath, "yt-dlp", locale);
       await assertCommandAvailable(this.options.ffmpegPath, "ffmpeg", locale);
-      cookieSnapshot = await this.options.createCookieSnapshot?.() ?? null;
+      cookieSnapshot = await this.options.createCookieSnapshot?.(request.url) ?? null;
       await fs.mkdir(request.outputDir, { recursive: true });
 
       tempDir = path.join(this.options.cacheDirectory, request.resumeKey);
@@ -291,6 +295,7 @@ export class DownloadEngine {
           segmentKey: segment.key,
         });
 
+        let downloadFraction: number | null = null;
         await runYtDlpWithFreshUrlRetry({
           args: buildYtDlpArgs({
             request,
@@ -304,12 +309,18 @@ export class DownloadEngine {
           job,
           locale,
           onLine: (line) => {
-            const percent = parseDownloadPercent(line);
-            send("downloading", line, {
+            const percent = parseDownloadPercent(line) ?? parseFfmpegTimeProgress(line, duration);
+            if (percent !== null) downloadFraction = Math.max(downloadFraction ?? 0, percent);
+            send("downloading", t(locale, "main.progress.downloadPercent", {
+              current: pendingIndex + 1,
+              total: segmentCount,
+              percent: downloadFraction === null ? "…" : `${Math.floor(downloadFraction * 100)}%`,
+            }), {
+              logMessage: line,
               progress:
-                percent === null
+                downloadFraction === null
                   ? undefined
-                  : segmentProgressStart + percent * downloadProgressSpan,
+                  : segmentProgressStart + downloadFraction * downloadProgressSpan,
               segmentIndex: pendingIndex + 1,
               segmentCount,
               segmentKey: segment.key,
@@ -344,6 +355,7 @@ export class DownloadEngine {
           },
         );
 
+        let cutFraction = 0;
         await runProcess(
           this.options.ffmpegPath,
           buildFfmpegArgs({
@@ -358,11 +370,18 @@ export class DownloadEngine {
             locale,
             onLine: (line) => {
               const progress = parseFfmpegTimeProgress(line, duration);
-              send("cutting", line, {
+              if (progress !== null) cutFraction = Math.max(cutFraction, progress);
+              send("cutting", t(locale, request.encodingPreset.copy
+                ? "main.progress.copyPercent" : "main.progress.encodePercent", {
+                current: pendingIndex + 1,
+                total: segmentCount,
+                percent: `${Math.floor(cutFraction * 100)}%`,
+              }), {
+                logMessage: line,
                 progress:
                   progress === null
                     ? undefined
-                    : cutProgressStart + progress * cutProgressSpan,
+                    : cutProgressStart + cutFraction * cutProgressSpan,
                 segmentIndex: pendingIndex + 1,
                 segmentCount,
                 segmentKey: segment.key,
@@ -406,7 +425,7 @@ export class DownloadEngine {
         completedSegments,
       };
     } catch (error) {
-      const message = getDownloadFailureMessage(error, locale);
+      const message = getDownloadFailureMessage(error, locale, payload.url);
       send("error", message, { progress: 0 });
       return { ok: false, jobId, error: message };
     } finally {
@@ -437,7 +456,7 @@ function cancelJob(job: DownloadJob): void {
   }
 }
 
-function normalizeDownloadRequest(
+export function normalizeDownloadRequest(
   payload: DownloadPayload | null | undefined,
 ): NormalizedDownloadRequest {
   const locale = normalizeLocale(payload?.locale);
@@ -450,7 +469,7 @@ function normalizeDownloadRequest(
   );
   const segments = normalizeDownloadSegments(payload, locale);
   const presetId = payload?.encodingPreset;
-  const encodingPreset =
+  const encodingPreset = presetId === "custom" ? customEncodingPreset(payload?.customFfmpegArgs, payload?.customExtension) :
     (presetId ? ENCODING_PRESETS[presetId] : undefined) ||
     (payload?.mode === "copy"
       ? ENCODING_PRESETS["youtube-copy"]
@@ -458,7 +477,8 @@ function normalizeDownloadRequest(
   const resumeKey =
     sanitizeResumeKey(String(payload?.resumeKey || "")) || `download-${Date.now()}`;
 
-  if (!isSupportedYouTubeUrl(url)) {
+  if (isChzzkLiveUrl(url)) throw new Error(t(locale, "preview.liveUnsupported"));
+  if (!parseVideoSource(url)) {
     throw new Error(t(locale, "main.error.invalidUrl"));
   }
   return {
@@ -530,8 +550,12 @@ function buildYtDlpArgs({
 }): string[] {
   const args = [
     "--ignore-config",
+    ...ytDlpSiteArgs(request.url),
     "--no-playlist",
     "--newline",
+    "--progress",
+    "--downloader-args",
+    "ffmpeg:-progress pipe:2 -nostats",
     "--continue",
     "--extractor-retries",
     "3",
@@ -573,7 +597,7 @@ function getYtDlpFormatSelector(quality: string): string {
   ].join("/");
 }
 
-function buildFfmpegArgs({
+export function buildFfmpegArgs({
   encodingPreset,
   inputPath,
   outputPath,
@@ -588,6 +612,9 @@ function buildFfmpegArgs({
 }): string[] {
   const common = [
     "-hide_banner",
+    "-progress",
+    "pipe:2",
+    "-nostats",
     "-y",
     "-ss",
     formatTimestamp(start),
@@ -722,12 +749,12 @@ function runProcess(
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { env, windowsHide: true });
     job.children.push(child);
-    let buffered = "";
+    const buffers = { stdout: "", stderr: "" };
     const lineTail: string[] = [];
-    const emitLines = (chunk: Buffer) => {
-      buffered += chunk.toString();
-      const lines = buffered.split(/\r?\n/);
-      buffered = lines.pop() || "";
+    const emitLines = (stream: keyof typeof buffers, chunk: Buffer) => {
+      buffers[stream] += chunk.toString();
+      const lines = buffers[stream].split(/[\r\n]/);
+      buffers[stream] = lines.pop() || "";
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) continue;
@@ -736,14 +763,16 @@ function runProcess(
         onLine(line);
       }
     };
-    child.stdout.on("data", emitLines);
-    child.stderr.on("data", emitLines);
+    child.stdout.on("data", (chunk: Buffer) => emitLines("stdout", chunk));
+    child.stderr.on("data", (chunk: Buffer) => emitLines("stderr", chunk));
     child.on("error", reject);
     child.on("close", (code) => {
-      const line = buffered.trim();
-      if (line) {
-        lineTail.push(line);
-        onLine(line);
+      for (const buffered of Object.values(buffers)) {
+        const line = buffered.trim();
+        if (line) {
+          lineTail.push(line);
+          onLine(line);
+        }
       }
       if (job.canceled) {
         reject(new Error(t(locale, "main.error.canceled")));
@@ -873,15 +902,6 @@ export function sanitizeResumeKey(value: string): string | null {
   return safe || null;
 }
 
-function isSupportedYouTubeUrl(value: string): boolean {
-  try {
-    const host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
-    return ["youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"].includes(host);
-  } catch {
-    return false;
-  }
-}
-
 function createSegmentKey(start: number, end: number): string {
   return `${start.toFixed(3)}-${end.toFixed(3)}`;
 }
@@ -896,7 +916,11 @@ function parseDownloadPercent(line: string): number | null {
 }
 
 function parseFfmpegTimeProgress(line: string, duration: number): number | null {
-  const match = line.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  // FFmpeg's out_time_ms, despite its name, also uses microseconds.
+  const numeric = line.match(/^out_time_(?:us|ms)=(-?\d+)$/);
+  if (numeric) return Math.max(0, Math.min(1, Number(numeric[1]) / 1_000_000 / duration));
+  const match = line.match(/(?:^|\s)(?:out_)?time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
   if (!match || duration <= 0) return null;
   const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
   return Math.max(0, Math.min(1, seconds / duration));
@@ -910,11 +934,11 @@ function isVersionAtLeast(version: string | undefined, minimum: string): boolean
     Number(`${required[1]}${required[2]}${required[3]}`);
 }
 
-function getDownloadFailureMessage(error: unknown, locale: SupportedLocale): string {
+function getDownloadFailureMessage(error: unknown, locale: SupportedLocale, url?: string): string {
   const detail = getErrorMessage(error);
   if (detail === "cookies.readFailed") return t(locale, detail);
   if (/HTTP Error 403|403 Forbidden/i.test(detail)) {
-    return t(locale, "main.error.youtubeForbidden");
+    return t(locale, url && parseVideoSource(url)?.site === "chzzk" ? "preview.denied" : "main.error.youtubeForbidden");
   }
   if (/the page needs to be reloaded|nsig extraction failed|no supported javascript runtime|javascript challenge|challenge solver/i.test(detail)) {
     return t(locale, "main.error.youtubeExtraction");

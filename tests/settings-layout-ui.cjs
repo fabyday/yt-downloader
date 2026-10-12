@@ -1,0 +1,102 @@
+const assert=require('node:assert/strict');
+const {app,BrowserWindow}=require('electron');
+const {once}=require('node:events');
+process.env.UI_HARNESS_PORT='0';
+const server=require('./ui-harness.cjs');
+const ready=server.listening?Promise.resolve():once(server,'listening');
+const deadline=setTimeout(()=>app.exit(1),45000);
+app.whenReady().then(async()=>{
+  await ready;
+  const win=new BrowserWindow({show:false,width:1440,height:950});
+  const js=code=>win.webContents.executeJavaScript(code);
+  const capture=async name=>{if(process.argv.includes('--screenshot'))await require('node:fs/promises').writeFile('/tmp/kawai-'+name+'.png',(await win.webContents.capturePage()).toPNG());};
+  await win.loadURL(`http://127.0.0.1:${server.address().port}/?view=editor&platform=darwin&sourceUrl=https://www.youtube.com/watch?v=fixture`);
+  const download=await js(`(async()=>{
+    const wait=ms=>new Promise(r=>setTimeout(r,ms));
+    while(document.querySelector('#endTime')?.textContent!=='10:00.000')await wait(50);
+    document.querySelector('#toggleDownloadPanelButton').click();await wait(600);
+    const cards=[...document.querySelectorAll('.download-config-card')].map(el=>{const r=el.getBoundingClientRect();return {height:r.height,width:r.width};});
+    const file=document.querySelector('#basenameInput').getBoundingClientRect(),folder=document.querySelector('.folder-row').getBoundingClientRect();
+    const panel=document.querySelector('.download-format-settings');
+    const before={height:panel.scrollHeight,top:panel.scrollTop};
+    document.querySelector('#encodingPresetSelect').click();await wait(100);
+    const list=document.querySelector('.popup-select-list'),rect=list.getBoundingClientRect();
+    const after={height:panel.scrollHeight,top:panel.scrollTop};
+    const portaled=list.parentElement===document.body;
+    const trigger=document.querySelector('#encodingPresetSelect');
+    trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));await wait(50);
+    const keyboardKeptParent=panel.scrollTop===before.top;
+    trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await wait(50);
+    const selected=trigger.value;
+    trigger.click();await wait(50);
+    return {cards,fileWidth:file.width,folderWidth:folder.width,before,after,portaled,withinViewport:rect.top>=0&&rect.bottom<=innerHeight,keyboardKeptParent,selected};
+  })()`);
+  console.log(JSON.stringify({download}));
+  assert.ok(download.cards[2].width>=download.cards[1].width);
+  assert.ok(download.cards.every(card=>Math.abs(card.height-download.cards[0].height)<1));
+  assert.ok(Math.abs(download.fileWidth-download.folderWidth)<1);
+  assert.deepEqual(download.before,download.after);assert.equal(download.portaled,true);assert.equal(download.withinViewport,true);assert.equal(download.keyboardKeptParent,true);assert.equal(download.selected,'audio-flac');
+  await capture('download-popup');
+  await js(`document.querySelector('#encodingPresetSelect').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));document.querySelector('#openPreferenceOverlayButton').click();new Promise(r=>setTimeout(r,100))`);
+  const general=await js(`(()=>{
+    const a=document.querySelector('.preference-application-card').getBoundingClientRect(),b=document.querySelector('.preference-playback-card').getBoundingClientRect(),c=document.querySelector('.preference-default-card').getBoundingClientRect();
+    return {sameHeight:Math.abs(a.height-b.height)<1,sameTop:a.top===b.top,defaultBelow:c.top>=a.bottom,defaultLeft:c.left===a.left};
+  })()`);
+  assert.ok(Object.values(general).every(Boolean));await capture('general-aligned');
+  const shortcuts=await js(`(async()=>{
+    const wait=()=>new Promise(r=>setTimeout(r,100));
+    [...document.querySelectorAll('[role=tab]')].find(el=>el.textContent==='Shortcuts').click();await wait();
+    const button=action=>document.querySelector('[data-shortcut-action='+action+'] .shortcut-binding-button');
+    const record=(action,meta)=>{const el=button(action);el.click();return new Promise(r=>setTimeout(()=>{el.dispatchEvent(new KeyboardEvent('keydown',{key:'s',code:'KeyS',ctrlKey:!meta,metaKey:meta,bubbles:true,cancelable:true}));r();},20));};
+    await record('smallForward',false);await wait();const controlLabel=button('smallForward').textContent;
+    await record('largeForward',true);await wait();const commandLabel=button('largeForward').textContent;
+    await record('smallBack',false);await wait();
+    const conflicts=[...document.querySelectorAll('.shortcut-conflict')].map(el=>({action:el.dataset.shortcutAction,color:getComputedStyle(el).borderTopColor}));
+    const inlineError=!!document.querySelector('[data-shortcut-action=smallBack] [role=alert]');
+    const group=document.querySelector('.preference-shortcuts').getBoundingClientRect();
+    return {controlLabel,commandLabel,conflicts,inlineError,width:group.width,
+      geometry:['.preference-overlay-backdrop','.preference-overlay-panel','.preference-overlay-header','.preference-tabs','.preference-overlay-scroll'].map(selector=>{const el=document.querySelector(selector),r=el.getBoundingClientRect();return {selector,top:r.top,height:r.height,scrollTop:el.scrollTop};})};
+  })()`);
+  assert.equal(shortcuts.controlLabel,'⌃S');assert.equal(shortcuts.commandLabel,'⌘S');
+  console.log(JSON.stringify({shortcuts}));
+  assert.deepEqual(shortcuts.conflicts.map(item=>item.action),['smallBack','smallForward']);
+  assert.ok(shortcuts.conflicts.every(item=>item.color==='rgb(255, 93, 108)'));assert.equal(shortcuts.inlineError,true);assert.ok(shortcuts.width<=780);
+  await capture('shortcut-conflict');
+  const cookies=await js(`(async()=>{
+    const wait=()=>new Promise(r=>setTimeout(r,100));
+    [...document.querySelectorAll('[role=tab]')].find(el=>el.textContent==='Cookies').click();await wait();
+    document.querySelector('#cookieProfileSelect').click();await wait();
+    const list=document.querySelector('.popup-select-list');const labels=[...list.querySelectorAll('[role=option]')].map(el=>el.textContent);
+    [...list.querySelectorAll('[role=option]')].find(el=>el.textContent.includes('Work')).click();await wait();
+    window.ytClipper.importBrowserCookies=async options=>{window.profileRequest=options;return {configured:true,count:2};};
+    document.querySelector('.cookie-actions button').click();await wait();
+    return {labels,profile:window.profileRequest.profile,browser:window.profileRequest.browser};
+  })()`);
+  assert.ok(cookies.labels.some(label=>label.includes('Personal')));assert.equal(cookies.profile,'Profile 1');assert.equal(cookies.browser,'chrome');await capture('profile-selector');
+  const appInfo=await js(`(async()=>{
+    [...document.querySelectorAll('[role=tab]')].find(el=>el.textContent==='App Info').click();await new Promise(r=>setTimeout(r,100));
+    const card=document.querySelector('.preference-app-info').getBoundingClientRect(),parent=document.querySelector('.preference-overlay-scroll').getBoundingClientRect();
+    return {offset:Math.abs(card.left+card.width/2-parent.left-parent.width/2),width:card.width};
+  })()`);
+  assert.ok(appInfo.offset<12);assert.ok(appInfo.width<=760);await capture('app-info-centered');
+  const playback=await js(`(async()=>{
+    [...document.querySelectorAll('[role=dialog] button')].find(el=>el.textContent==='Save changes').click();await new Promise(r=>setTimeout(r,100));
+    document.querySelector('#toggleDownloadPanelButton').click();await new Promise(r=>setTimeout(r,600));
+    const key=meta=>document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'s',code:'KeyS',ctrlKey:!meta,metaKey:meta,bubbles:true,cancelable:true}));
+    key(false);await new Promise(r=>setTimeout(r,100));const control=window.mockPlayer.getCurrentTime();
+    key(true);await new Promise(r=>setTimeout(r,100));return {control,command:window.mockPlayer.getCurrentTime()};
+  })()`);
+  assert.equal(playback.control,1);assert.equal(playback.command,11);
+  win.setSize(1100,800);
+  const smallWindow=await js(`(async()=>{
+    document.querySelector('#toggleDownloadPanelButton').click();await new Promise(r=>setTimeout(r,600));
+    const panel=document.querySelector('.download-format-settings');
+    const before=[panel.scrollHeight,panel.scrollTop];
+    document.querySelector('#encodingPresetSelect').click();await new Promise(r=>setTimeout(r,100));
+    const r=document.querySelector('.popup-select-list').getBoundingClientRect();
+    return {before,after:[panel.scrollHeight,panel.scrollTop],fits:r.top>=0&&r.bottom<=innerHeight&&r.right<=innerWidth};
+  })()`);
+  assert.equal(smallWindow.fits,true);assert.deepEqual(smallWindow.before,smallWindow.after);
+  console.log('Popup clipping/ancestor scroll, panel sizing, macOS Ctrl/Cmd binding, inline conflicts, discovered profile extraction, centered settings passed');
+  win.destroy();server.close();clearTimeout(deadline);app.exit(0);
+}).catch(error=>{console.error(error);app.exit(1);});

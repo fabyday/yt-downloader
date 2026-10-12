@@ -12,7 +12,7 @@ export function WindowTitleBar({ title }: WindowTitleBarProps) {
           <rect x="1" y="1" width="18" height="18" rx="5" fill="currentColor" />
           <path d="m8 6 6 4-6 4Z" fill="#111317" />
         </svg>
-        <span className="window-title-bar-brand">YT SECTION DOWNLOADER</span>
+        <span className="window-title-bar-brand">kawai-downloader</span>
         {title && <span className="window-title-bar-caption">{title}</span>}
       </div>
     </header>

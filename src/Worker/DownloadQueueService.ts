@@ -327,8 +327,9 @@ export class DownloadQueueService {
 
     if (progress.message) {
       item.message = progress.message;
-      appendLog(item, `[${progress.stage || "progress"}] ${progress.message}`);
     }
+    const logMessage = progress.logMessage ?? progress.message;
+    if (logMessage) appendLog(item, `[${progress.stage || "progress"}] ${logMessage}`);
     if (progress.outputPath) {
       item.outputPath = progress.outputPath;
     }

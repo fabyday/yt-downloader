@@ -1,4 +1,5 @@
-import { Box, Select, type SelectOption } from "@kawaikara/kawai-ui";
+import { Box, type SelectOption } from "@kawaikara/kawai-ui";
+import { PopupSelect as Select } from "./PopupSelect";
 import type { SupportedLocale } from "../../Shared/locale";
 import { useI18n } from "../I18nProvider";
 

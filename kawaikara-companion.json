@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "com.ytdownloader.app",
-  "name": "YT Section Downloader",
+  "name": "kawai-downloader",
   "transport": {
     "type": "url-scheme",
     "scheme": "yt-downloader",
@@ -58,6 +58,17 @@
               "hostname": "youtu.be",
               "paths": [
                 { "kind": "prefix", "value": "/", "minimumPathSegments": 1 }
+              ]
+            }
+          ]
+        },
+        {
+          "service": "chzzk",
+          "urls": [
+            {
+              "hostname": "chzzk.naver.com",
+              "paths": [
+                { "kind": "prefix", "value": "/video/", "minimumPathSegments": 2 }
               ]
             }
           ]

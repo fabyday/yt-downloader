@@ -1,0 +1,35 @@
+const assert = require('node:assert/strict');
+const {app,BrowserWindow} = require('electron');
+const {once} = require('node:events');
+process.env.UI_HARNESS_PORT='0';
+const server=require('./ui-harness.cjs');
+const ready=server.listening?Promise.resolve():once(server,'listening');
+const deadline=setTimeout(()=>app.exit(1),30000);
+app.whenReady().then(async()=>{
+  await ready;
+  const win=new BrowserWindow({show:false,width:1200,height:900});
+  await win.loadURL('http://127.0.0.1:'+server.address().port+'/?view=editor');
+  const result=await win.webContents.executeJavaScript(`(async()=>{
+    const wait=ms=>new Promise(r=>setTimeout(r,ms));
+    while(!document.querySelector('#openPreferenceOverlayButton'))await wait(50);
+    document.querySelector('#openPreferenceOverlayButton').click();await wait(100);
+    [...document.querySelectorAll('[role=tab]')].find(el=>el.textContent==='App Info').click();await wait(200);
+    const button=document.querySelector('#checkYtDlpUpdateButton');
+    const initial=!button.disabled;
+    let count=0,state={status:'unavailable',version:null};
+    window.ytClipper.getYtDlpUpdateStatus=async()=>state;
+    window.ytClipper.checkYtDlpUpdate=async()=>{count++;state={status:'checking',version:null};return state;};
+    button.click();await wait(100);
+    const pending=button.disabled;
+    button.click();await wait(50);
+    const deduplicated=count===1;
+    state={status:'updated',version:'2026.10.01'};await wait(2200);
+    const complete=!button.disabled&&button.parentElement.textContent.includes('2026.10.01');
+    window.ytClipper.checkYtDlpUpdate=async()=>{state={status:'managed',version:null};return state;};
+    button.click();await wait(100);
+    return {initial,pending,deduplicated,complete,managed:button.disabled};
+  })()`);
+  for(const [key,value] of Object.entries(result))assert.equal(value,true,key);
+  console.log('yt-dlp manual check: busy protection, progress polling, completed version, managed disable passed');
+  win.destroy();server.close();clearTimeout(deadline);app.exit(0);
+}).catch(error=>{console.error(error);server.close();app.exit(1);});

@@ -7,11 +7,22 @@ import type {
 } from "../Shared/types";
 
 const api: YtClipperApi = {
+  resolvePreview: (videoId) => ipcRenderer.invoke("preview:resolve", videoId),
+  onCookiesChanged: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: import("../Shared/types").CookieStatus) => handler(status);
+    ipcRenderer.on("cookies:changed", listener);
+    return () => ipcRenderer.off("cookies:changed", listener);
+  },
   getCookieStatus: () => ipcRenderer.invoke("cookies:status"),
-  importCookies: () => ipcRenderer.invoke("cookies:import"),
+  requestCookieAccess: (options) => ipcRenderer.invoke("cookies:request-access", options),
+  openCookiePermissionSettings: (target) => ipcRenderer.invoke("cookies:open-permissions", target),
+  getBrowserCookieStatus: (options) => ipcRenderer.invoke("cookies:browser-status", options),
+  getBrowserProfiles: (options) => ipcRenderer.invoke("cookies:profiles", options),
+  importCookies: (site) => ipcRenderer.invoke("cookies:import", site),
   importBrowserCookies: (options) => ipcRenderer.invoke("cookies:import-browser", options),
-  clearCookies: () => ipcRenderer.invoke("cookies:clear"),
+  clearCookies: (site) => ipcRenderer.invoke("cookies:clear", site),
   getYtDlpUpdateStatus: () => ipcRenderer.invoke("app:yt-dlp-update-status"),
+  checkYtDlpUpdate: () => ipcRenderer.invoke("app:yt-dlp-update-check"),
   getDependencyStatus: () => ipcRenderer.invoke("app:get-dependency-status"),
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),

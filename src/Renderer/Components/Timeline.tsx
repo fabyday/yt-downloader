@@ -2,7 +2,6 @@ import {
   Box,
   Flex,
   Pressable,
-  Slider,
   Text,
 } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
@@ -71,6 +70,14 @@ export function Timeline() {
         <Box position="absolute" id="timelineRulerPlayhead" className="timeline-ruler-playhead" />
       </Pressable>
       <Box id="timelineShell" position="relative" className="timeline-shell">
+        <div id="markerSplitTags" className="marker-split-tags hidden">
+          <button type="button" id="splitStartMarker" title={t("timeline.adjustStart")}>
+            <span>{t("range.start")}</span>
+          </button>
+          <button type="button" id="splitEndMarker" title={t("timeline.adjustEnd")}>
+            <span>{t("range.end")}</span>
+          </button>
+        </div>
         <Box position="relative" className="timeline-track" aria-hidden="true">
           <Box position="absolute" id="timelineSegments" className="timeline-segments">
             <TimelineSegmentContent />
@@ -88,12 +95,10 @@ export function Timeline() {
           className="timeline-marker timeline-marker-end hidden"
           aria-label={t("timeline.adjustEnd")}
         />
-        <Slider
+        <input
+          type="range"
           id="timelineInput"
           className="timeline-input"
-          containerClassName="timeline-slider-control"
-          trackClassName="timeline-native-track"
-          controlSize="sm"
           min={0}
           max={0}
           step={0.01}
@@ -109,7 +114,7 @@ export function Timeline() {
           <Box position="absolute" className="timeline-current-line" />
           <Pressable
             id="currentTimeHandle"
-            className="timeline-current-knob"
+            className="timeline-current-hitarea"
             role="slider"
             aria-label={t("playback.dragPosition")}
             title={t("playback.dragPosition")}

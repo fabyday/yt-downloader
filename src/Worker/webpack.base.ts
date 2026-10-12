@@ -1,6 +1,7 @@
 import type { Configuration } from "webpack";
 
 const path = require("node:path");
+const CopyPlugin = require("copy-webpack-plugin");
 
 const config: Configuration = {
   name: "worker",
@@ -26,6 +27,10 @@ const config: Configuration = {
   resolve: {
     extensions: [".ts", ".js"]
   },
+  plugins: [new CopyPlugin({ patterns: [{
+    from: path.resolve(__dirname, "yt-dlp-plugins"), to: "yt-dlp-plugins",
+    globOptions: { ignore: ["**/__pycache__/**", "**/*.pyc"] },
+  }] })],
   node: {
     __dirname: false,
     __filename: false

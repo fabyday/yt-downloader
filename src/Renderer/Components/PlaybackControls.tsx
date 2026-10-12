@@ -1,9 +1,11 @@
 import { Box, Button, Flex, Stack, Switch, Text } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
 import { Caption } from "./Caption";
+import { useRendererViewSnapshot } from "../viewStore";
 
 export function PlaybackControls() {
   const { t } = useI18n();
+  const { selectionMode } = useRendererViewSnapshot();
 
   return (
     <Box as="section" className="transport" aria-label={t("playback.controls")}>
@@ -84,6 +86,7 @@ export function PlaybackControls() {
       </Flex>
 
       <Switch
+        disabled={selectionMode !== "clamp"}
         id="loopToggle"
         label={t("playback.loop")}
         className="loop-toggle"

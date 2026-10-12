@@ -3,13 +3,49 @@ const { test } = require('node:test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { CookieStore, normalizeCookieFile } = require('../src/Worker/CookieStore.ts');
+const { CookieStore, normalizeCookieFile, prepareCookieDirectory } = require('../src/Worker/CookieStore.ts');
 const { DownloadEngine } = require('../src/Worker/DownloadEngine.ts');
-const { exportBrowserCookies } = require('../src/Worker/BrowserCookies.ts');
+const { exportBrowserCookies, normalizeBrowserCookieExpiry } = require('../src/Worker/BrowserCookies.ts');
 const { browserCookieSpec } = require('../src/Shared/cookies.ts');
 
 const row = (domain, value = 'test-value', expires = '0') => `${domain}\tTRUE\t/\tTRUE\t${expires}\tSID\t${value}`;
 const file = (...rows) => ['# Netscape HTTP Cookie File', ...rows, ''].join('\n');
+
+test('cookie storage never overwrites Electron Cookies and migrates a legacy directory only once', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yt-cookie-location-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const collision = path.join(root, 'collision');
+  await fs.mkdir(collision);
+  await fs.writeFile(path.join(collision, 'cookies'), 'Electron SQLite fixture');
+  const directory = await prepareCookieDirectory(collision);
+  assert.equal(path.basename(directory), 'downloader-auth');
+  await new CookieStore(directory).import(file(row('.youtube.com')));
+  assert.equal(await fs.readFile(path.join(collision, 'cookies'), 'utf8'), 'Electron SQLite fixture');
+  const legacyState = path.join(root, 'legacy');
+  await new CookieStore(path.join(legacyState, 'cookies')).import(file(row('.youtube.com')));
+  const migrated = await prepareCookieDirectory(legacyState);
+  assert.deepEqual(await new CookieStore(migrated).getStatus(), { configured: true, count: 1 });
+  await new CookieStore(migrated).clear();
+  assert.equal(await prepareCookieDirectory(legacyState), migrated);
+  assert.deepEqual(await new CookieStore(migrated).getStatus(), { configured: false, count: 0 });
+});
+
+test('Chromium exports convert microseconds since 1601 without accepting malformed input', () => {
+  const now = 1800000000000;
+  const chromiumExpiry = seconds => ((BigInt(seconds) + 11644473600n) * 1000000n).toString();
+  const original = file(row('.youtube.com', 'future', chromiumExpiry(1900000000)),
+    row('.youtube.com', 'expired', chromiumExpiry(1700000000)),
+    row('.google.com', 'session', '0'), row('.youtube.com', 'normal', '1900000000'));
+  const converted = normalizeBrowserCookieExpiry(original, 'chrome');
+  const result = normalizeCookieFile(converted, now);
+  assert.equal(result.count, 3);
+  assert.doesNotMatch(result.contents, /expired/);
+  assert.match(result.contents, /1900000000\tSID\tfuture/);
+  assert.equal(normalizeBrowserCookieExpiry(converted, 'chrome'), converted);
+  assert.equal(normalizeBrowserCookieExpiry(original, 'firefox'), original);
+  assert.equal(normalizeBrowserCookieExpiry(original, 'safari'), original);
+  assert.throws(() => normalizeCookieFile(normalizeBrowserCookieExpiry(file(row('.youtube.com', 'x', '9999999999999999999')), 'chrome')), /cookies.invalid/);
+});
 
 test('browser import permits only supported browsers and profile names', () => {
   assert.equal(browserCookieSpec({ browser: 'chrome', profile: 'Profile 1' }), 'chrome:Profile 1');
@@ -30,7 +66,7 @@ test('browser export filters cookies and removes the full temporary jar even on 
       assert.equal(args[args.indexOf('--cookies-from-browser') + 1], 'edge:Profile 1');
       assert.ok(!args.some((arg) => arg.startsWith('https:')));
       exportedPath = args[args.indexOf('--cookies') + 1];
-      await fs.writeFile(exportedPath, file(row('.youtube.com'), row('.unrelated.test')));
+      await fs.writeFile(exportedPath, file(row('.youtube.com', 'from-chromium', ((BigInt(Math.floor(Date.now() / 1000) + 86400) + 11644473600n) * 1000000n).toString()), row('.unrelated.test')));
       return { code: 2, stderr: 'ERROR: You must provide at least one URL.' };
     },
   });
@@ -48,6 +84,9 @@ test('browser failure preserves the previous setting and cleans temporary export
   for (const [stderr, expected] of [
     ['ERROR: Could not copy Chrome cookie database secret-path', 'browserLocked'],
     ['ERROR: Failed to decrypt with DPAPI secret-cookie', 'decryptFailed'],
+    ['WARNING: find-generic-password failed secret-data', 'keychainAccessFailed'],
+    ['ERROR: Permission denied secret-path', 'permissionDenied'],
+    ['ERROR: Operation not permitted secret-path', 'permissionDenied'],
     ['ERROR: could not find firefox cookies database', 'browserMissing'],
     ['ERROR: something secret happened', 'browserFailed'],
   ]) {
@@ -134,8 +173,18 @@ test('downloads pass the private cookie jar to yt-dlp and dispose it on success 
             child.emit('close', 1);
             return;
           }
+          assert.ok(args.includes('ffmpeg:-progress pipe:2 -nostats'));
+          child.stderr.write('frame=25 time=00:00:02.50 bitrate=100kbits/s\r');
+          child.stderr.write('out_time_us=');
+          child.stdout.write('[info] download active\n');
+          child.stderr.write('4000000\n');
+          child.stdout.write('[download] 10.0% of 1MiB\r');
           await fs.writeFile(args[args.indexOf('-o') + 1].replace('%(ext)s', 'mkv'), 'fake section');
-        } else await fs.writeFile(args.at(-1), 'fake output');
+        } else {
+          assert.ok(args.includes('-progress'));
+          child.stderr.write('out_time_us=N/A\nout_time_us=2500000\n');
+          await fs.writeFile(args.at(-1), 'fake output');
+        }
         child.exitCode = 0;
         child.emit('close', 0);
       } catch (error) { child.emit('error', error); }
@@ -153,7 +202,15 @@ test('downloads pass the private cookie jar to yt-dlp and dispose it on success 
     encodingPreset: 'youtube-copy', basename: 'test', outputDir: path.join(directory, 'output'),
     resumeKey: 'success', keepSourceCache: true,
   };
-  assert.equal((await engine.execute(payload, () => {})).ok, true);
+  const updates = [];
+  assert.equal((await engine.execute(payload, update => updates.push(update))).ok, true);
+  const downloading = updates.filter(update => update.stage === 'downloading');
+  assert.ok(downloading.some(update => Math.abs(update.progress - 0.35) < 0.0001));
+  assert.ok(downloading.some(update => Math.abs(update.progress - 0.56) < 0.0001));
+  assert.match(downloading.at(-1).message, /yt-dlp.*80%/);
+  assert.equal(downloading.at(-1).logMessage, '[download] 10.0% of 1MiB');
+  assert.ok(updates.some(update => update.stage === 'cutting' &&
+    Math.abs(update.progress - 0.84) < 0.0001 && /ffmpeg.*50%/.test(update.message)));
   assert.equal(calls.length, 1);
   assert.ok(calls[0].includes('--cookies'));
   await assert.rejects(fs.stat(cookiePath), { code: 'ENOENT' });

@@ -1,3 +1,4 @@
+const { testBinary } = require('./binaries.cjs');
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs/promises");
@@ -196,14 +197,14 @@ test("the engine waits for the startup updater and uses its resolved binary", as
   const ready = new Promise((resolve) => { resolveUpdate = resolve; });
   const engine = new DownloadEngine({
     ytDlpPath: "/missing-old-binary", resolveYtDlpPath: () => ready,
-    ffmpegPath: path.resolve(__dirname, "../thirdparty/bin", process.platform, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"),
+    ffmpegPath: testBinary('ffmpeg'),
     nodeRuntimePath: process.execPath, cacheDirectory: os.tmpdir(),
   });
   let done = false;
   const pending = engine.getDependencyStatuses().then((value) => { done = true; return value; });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(done, false);
-  const actual = path.resolve(__dirname, "../thirdparty/bin", process.platform, process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp");
+  const actual = testBinary('yt-dlp');
   resolveUpdate(actual);
   assert.equal((await pending).ytDlp.command, actual);
 });
@@ -265,4 +266,42 @@ test("an outdated first installation waits for a validated new binary", async (t
   const installed = await pendingPath;
   assert.notEqual(installed, options.fallbackPath);
   assert.equal(await prepared.finished, installed);
+});
+
+test('manual retry after offline startup is single-flight and updates the path for future jobs', async t => {
+  const {options}=await fixture(t);
+  await fs.writeFile(options.fallbackPath,latest);
+  const states=[];
+  options.onStatus=state=>states.push(state);
+  const online=options.fetch;
+  options.fetch=async()=>{throw Error('offline');};
+  const prepared=prepareYtDlpOnStartup(options);
+  assert.equal(await prepared.finished,options.fallbackPath);
+  assert.equal(states.at(-1).status,'error');
+  let release;
+  options.fetch=async url=>url===releaseUrl?new Promise(resolve=>{release=resolve;}):online(url,{signal:new AbortController().signal});
+  const first=prepared.check(),second=prepared.check();
+  assert.equal(first,second);
+  assert.equal(await prepared.getPath(),options.fallbackPath);
+  while(!release)await new Promise(resolve=>setImmediate(resolve));
+  release(Response.json({tag_name:latest,assets:[]}));
+  await first;
+  assert.equal(states.at(-1).status,'current');
+});
+
+test('missing initial binaries report unavailable, then manual retry can install without restart',async t=>{
+  const {options}=await fixture(t);
+  await fs.rm(options.fallbackPath);
+  const online=options.fetch,states=[];
+  options.onStatus=state=>states.push(state);
+  options.fetch=async()=>{throw Error('offline');};
+  const prepared=prepareYtDlpOnStartup(options);
+  await prepared.finished;
+  assert.equal(states.at(-1).status,'unavailable');
+  assert.equal(await prepared.getPath(),options.fallbackPath);
+  options.fetch=online;
+  const installed=await prepared.check();
+  assert.notEqual(installed,options.fallbackPath);
+  assert.equal(await prepared.getPath(),installed);
+  assert.equal(states.at(-1).status,'updated');
 });

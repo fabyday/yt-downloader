@@ -165,6 +165,9 @@ function QueueRow({
         {item.meta}
       </Text>
 
+      <Text as="div" size="xs" tone="muted">
+        {t("queue.overallProgress", { percent: Math.floor(item.progress * 100) })}
+      </Text>
       <Progress
         value={item.progress * 100}
         size="sm"

@@ -14,13 +14,9 @@ import type { DownloadQueueItem } from "../Shared/types";
 import { BaseManager } from "./Manager/BaseManager";
 import { WorkerManagerReturnType } from "./Manager/ReturnTypes";
 import { WorkerClient } from "./WorkerClient";
+import { managedBinaryPath } from "../Shared/BinaryPaths";
 
 type BinaryName = "yt-dlp" | "ffmpeg";
-
-const PLATFORM_BINARY_NAMES: Record<BinaryName, string> = {
-  "yt-dlp": process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp",
-  ffmpeg: process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg",
-};
 
 export class WorkerManager extends BaseManager<WorkerManagerReturnType> {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -207,46 +203,10 @@ function getConfiguredBinary(defaultName: BinaryName, envName: string): string {
   const configured = process.env[envName]?.trim();
   if (configured) return configured;
 
-  const bundled = getBundledBinary(defaultName);
-  if (bundled) return bundled;
-
-  for (const directory of ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]) {
-    const candidate = path.join(directory, PLATFORM_BINARY_NAMES[defaultName]);
-    if (canExecute(candidate)) return candidate;
-  }
-  return PLATFORM_BINARY_NAMES[defaultName];
-}
-
-function getBundledBinary(defaultName: BinaryName): string | null {
-  const executable = PLATFORM_BINARY_NAMES[defaultName];
-  const platformDirectory = path.join("thirdparty", "bin", process.platform, executable);
-  const resourcesPath = (
-    process as NodeJS.Process & { resourcesPath?: string }
-  ).resourcesPath;
-  const candidates = [
-    path.join(app.getAppPath(), platformDirectory),
-    path.join(__dirname, "..", "..", platformDirectory),
-    resourcesPath ? path.join(resourcesPath, platformDirectory) : "",
-    resourcesPath
-      ? path.join(resourcesPath, "app.asar.unpacked", platformDirectory)
-      : "",
-  ];
-  for (const candidate of new Set(candidates.filter(Boolean))) {
-    if (canExecute(candidate)) return candidate;
-  }
-  return null;
-}
-
-function canExecute(filePath: string): boolean {
-  try {
-    fsSync.accessSync(
-      filePath,
-      process.platform === "win32" ? fsSync.constants.F_OK : fsSync.constants.X_OK,
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return managedBinaryPath({
+    appPath: app.getAppPath(), resourcesPath: process.resourcesPath,
+    packaged: app.isPackaged, platform: process.platform, arch: process.arch,
+  }, defaultName);
 }
 
 function waitForExit(

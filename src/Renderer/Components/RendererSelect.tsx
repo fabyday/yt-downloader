@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Select, type SelectOption } from "@kawaikara/kawai-ui";
+import { type SelectOption } from "@kawaikara/kawai-ui";
+import { PopupSelect as Select } from "./PopupSelect";
 
 const RENDERER_SELECT_SET_EVENT = "kawai-renderer-select-set";
 
@@ -9,6 +10,8 @@ export interface RendererSelectProps {
   id: string;
   label: string;
   options: readonly SelectOption[];
+  disabled?: boolean;
+  onValueChange?: (value: string) => void;
 }
 
 export function RendererSelect({
@@ -16,6 +19,8 @@ export function RendererSelect({
   id,
   label,
   options,
+  disabled,
+  onValueChange,
 }: RendererSelectProps) {
   const [value, setValue] = useState(defaultValue);
   const controlRef = useRef<HTMLButtonElement>(null);
@@ -35,7 +40,7 @@ export function RendererSelect({
         return;
       }
 
-      flushSync(() => setValue(nextValue));
+      flushSync(() => { setValue(nextValue); onValueChange?.(nextValue); });
     };
 
     control.addEventListener(RENDERER_SELECT_SET_EVENT, handleExternalValue);
@@ -44,17 +49,19 @@ export function RendererSelect({
         RENDERER_SELECT_SET_EVENT,
         handleExternalValue,
       );
-  }, [options]);
+  }, [options, onValueChange]);
 
   return (
     <Select
       ref={controlRef}
+      disabled={disabled}
       id={id}
       label={label}
       options={options}
       value={value}
       onValueChange={(nextValue) => {
         setValue(nextValue);
+        onValueChange?.(nextValue);
         queueMicrotask(() => {
           controlRef.current?.dispatchEvent(
             new Event("change", { bubbles: true }),

@@ -5,11 +5,17 @@ import {
   YT_DOWNLOADER_PROTOCOL,
 } from "./ExternalProtocol";
 import { ApplicationManager } from "./Manager/ApplicationManager";
+import { readHardwareAccelerationPreference } from "./HardwareAcceleration";
 
-// Keep video frames in Chromium's software-composited surface so macOS page
-// and window captures can include them instead of losing a GPU overlay layer.
-// Electron requires this to run before the app becomes ready.
-app.disableHardwareAcceleration();
+// Keep existing preferences, cookies and queue data across the display-name change.
+app.setPath("userData", path.join(app.getPath("appData"),
+  app.isPackaged ? "YT Section Downloader" : "yt-section-downloader"));
+app.setName("kawai-downloader");
+
+// Electron requires this setting before ready; saved changes apply next launch.
+if (!readHardwareAccelerationPreference(app.getPath("userData"))) {
+  app.disableHardwareAcceleration();
+}
 
 const applicationManager = new ApplicationManager();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();

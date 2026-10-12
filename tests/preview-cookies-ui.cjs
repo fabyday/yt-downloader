@@ -1,0 +1,48 @@
+const assert = require('node:assert/strict');
+const { app, BrowserWindow } = require('electron');
+const { once } = require('node:events');
+process.env.UI_HARNESS_PORT = '0';
+const server = require('./ui-harness.cjs');
+const ready = server.listening ? Promise.resolve() : once(server, 'listening');
+const deadline = setTimeout(() => app.exit(1), 30000);
+app.whenReady().then(async () => {
+  await ready;
+  const win = new BrowserWindow({show:false, width:1400, height:1000});
+  await win.loadURL(`http://127.0.0.1:${server.address().port}/?view=editor&sourceUrl=https://www.youtube.com/watch?v=fixture`);
+  const result = await win.webContents.executeJavaScript(`(async () => {
+    const wait = () => new Promise(resolve => setTimeout(resolve, 250));
+    for (let i=0; i<30 && !document.querySelector('#openPreferenceOverlayButton'); i++) await wait();
+    await wait();
+    document.querySelector('#openPreferenceOverlayButton').click(); await wait();
+    [...document.querySelectorAll('[role="tab"]')].find(el => el.textContent === 'Cookies').click(); await wait();
+    const modal = document.querySelector('[role="dialog"]');
+    const url = document.querySelector('#urlInput').value;
+    const duration = document.querySelector('#durationTime').textContent;
+    const applied = {configured:true, count:4, previewApplied:true, previewCount:2};
+    window.cookieListeners.forEach(handler => handler(applied)); await wait();
+    const badge = document.querySelector('#cookieStatus')?.textContent;
+    const toolbarBadge = !!document.querySelector('#openPreferenceOverlayButton .toolbar-cookie-badge');
+    const message = document.querySelector('.cookie-application-status').textContent;
+    const preserved = document.querySelector('[role="dialog"]') === modal && document.querySelector('#urlInput').value === url && document.querySelector('#durationTime').textContent === duration;
+    const recreated = window.playerRecreated;
+    window.mockPlayer.options.events.onError({data:100}); await wait();
+    const expired = document.querySelector('.preview-feedback')?.textContent.includes('expired or rotated');
+    const expiredBadge = document.querySelector('#cookieStatus')?.textContent;
+    window.mockPreviewResult = {ok:false,error:'preview.denied'};
+    window.cookieListeners.forEach(handler => handler({configured:false, count:0, previewApplied:false})); await wait();
+    return {badge, toolbarBadge, message, preserved, recreated, expired, expiredBadge,
+      refreshed:document.querySelector('.preview-feedback')?.textContent.includes('cannot access'), cleared:document.querySelector('#cookieStatus').textContent, recreatedAfterClear:window.playerRecreated};
+  })()`);
+  assert.equal(result.badge, 'Cookies saved');
+  assert.match(result.message, /have not been verified/);
+  assert.equal(result.preserved, true);
+  assert.equal(result.recreated, 1);
+  assert.equal(result.recreatedAfterClear, 2);
+  assert.equal(result.toolbarBadge, false);
+  assert.match(result.cleared, /No valid cookies/);
+  assert.equal(result.expired, true);
+  assert.equal(result.expiredBadge, 'Refresh cookies');
+  assert.equal(result.refreshed, true);
+  console.log('Preview UI: saved indicator, expired-cookie error, current URL refresh, editor preservation, clear passed');
+  win.destroy(); server.close(); clearTimeout(deadline); app.exit(0);
+}).catch(error => {console.error(error); app.exit(1);});

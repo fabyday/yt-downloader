@@ -3,7 +3,6 @@ import {
   Button,
   Flex,
   Head,
-  Panel,
   ScrollArea,
   Stack,
   Tab,
@@ -13,7 +12,7 @@ import {
   Text,
 } from "@kawaikara/kawai-ui";
 import { useEffect, useState } from "react";
-import { DEFAULT_APP_PREFERENCES } from "../../Shared/preferences";
+import { DEFAULT_APP_PREFERENCES, normalizeAppPreferences } from "../../Shared/preferences";
 import type { AppPreferences } from "../../Shared/types";
 import {
   PreferenceAppInfo,
@@ -21,6 +20,7 @@ import {
 } from "../Components";
 import { useI18n } from "../I18nProvider";
 import { PreferenceCookies } from "../Components/PreferenceCookies";
+import { PreferenceShortcuts } from "../Components/PreferenceShortcuts";
 
 interface PreferenceOverlayViewProps {
   onClose: () => void;
@@ -39,7 +39,7 @@ export function PreferenceOverlayView({
     if (!open) return;
     let active = true;
     void window.ytClipper.getPreferences().then((preferences) => {
-      if (active) setDraft(preferences);
+      if (active) setDraft(normalizeAppPreferences(preferences));
     });
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -81,9 +81,7 @@ export function PreferenceOverlayView({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <Panel
-        padding="none"
-        radius="lg"
+      <section
         className="preference-overlay-panel"
         role="dialog"
         aria-modal="true"
@@ -102,19 +100,22 @@ export function PreferenceOverlayView({
             </Text>
           </Stack>
           <Button
-            variant="ghost"
-            size="icon"
+            variant="secondary"
+            size="md"
+            className="preference-close-button"
             aria-label={t("common.close")}
             title={t("common.close")}
             onClick={onClose}
           >
-            ×
+            × {t("common.close")}
           </Button>
         </Flex>
 
         <Tabs defaultValue="general" className="preference-tabs">
           <TabList className="preference-tab-list">
             <Tab value="general">{t("preference.generalTab")}</Tab>
+            <Tab value="cookies">{t("preference.cookiesTab")}</Tab>
+            <Tab value="shortcuts">{t("preference.shortcuts")}</Tab>
             <Tab value="app-info">{t("preference.appInfoTab")}</Tab>
           </TabList>
           <ScrollArea className="preference-overlay-scroll" scrollbar="thin">
@@ -124,6 +125,8 @@ export function PreferenceOverlayView({
                 onChange={updateDraft}
                 onChooseDirectory={() => void chooseDirectory()}
               />
+            </TabPanel>
+            <TabPanel value="cookies" className="preference-tab-panel">
               <PreferenceCookies />
             </TabPanel>
             <TabPanel value="app-info" className="preference-tab-panel">
@@ -133,6 +136,9 @@ export function PreferenceOverlayView({
                   updateDraft({ automaticUpdates })
                 }
               />
+            </TabPanel>
+            <TabPanel value="shortcuts" className="preference-tab-panel">
+              <PreferenceShortcuts bindings={draft.shortcuts} onChange={shortcuts => updateDraft({ shortcuts })} />
             </TabPanel>
           </ScrollArea>
         </Tabs>
@@ -145,7 +151,7 @@ export function PreferenceOverlayView({
             {saving ? t("common.saving") : t("common.save")}
           </Button>
         </Flex>
-      </Panel>
+      </section>
     </Box>
   );
 }

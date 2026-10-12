@@ -14,6 +14,7 @@ import { RendererServerManager } from "./RendererServerManager";
 import { ApplicationReturnType } from "./ReturnTypes";
 import { WindowManager } from "./WindowManager";
 import { WorkerManager } from "./WorkerManager";
+import { CompanionManager } from "./CompanionManager";
 import { UpdateManager } from "./UpdateManager";
 
 export class ApplicationManager extends BaseManager<ApplicationReturnType> {
@@ -27,6 +28,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
   private readonly updateManager = new UpdateManager();
   private windowManager: WindowManager | null = null;
   private readonly workerManager = new WorkerManager();
+  private readonly companionManager = new CompanionManager();
 
   registerLifecycle(): void {
     if (this.lifecycleRegistered) return;
@@ -94,12 +96,16 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
         );
       }
 
-      this.windowManager = new WindowManager(rendererResult.data.url);
+      this.windowManager = new WindowManager(
+        rendererResult.data.url,
+        this.companionManager,
+      );
       this.ipcManager = new IPCManager(
         this.workerManager,
         this.windowManager,
         this.preferenceManager,
         this.updateManager,
+        this.companionManager,
       );
       const ipcResult = await this.ipcManager.initialize();
       if (!ipcResult.ok) {
@@ -142,9 +148,10 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
   }
 
   async finalize(): Promise<ReturnCode<ApplicationReturnType>> {
+    // Persist any last preview-cookie refresh while the Worker is still alive.
+    const ipcResult = await this.ipcManager?.finalize();
     const results = await Promise.all([
       this.windowManager?.finalize(),
-      this.ipcManager?.finalize(),
       this.rendererServerManager.finalize(),
       this.workerManager.finalize(),
       this.updateManager.finalize(),
@@ -154,7 +161,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
     this.ipcManager = null;
     this.initialized = false;
 
-    const failed = results.find((result) => result && !result.ok);
+    const failed = [ipcResult, ...results].find((result) => result && !result.ok);
     if (failed && !failed.ok) {
       return failureReturnCode(
         ApplicationReturnType.FinalizationFailed,
@@ -194,7 +201,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
     await dialog.showMessageBox({
       detail: getReturnCodeMessage(result),
       message,
-      title: "YT Section Downloader",
+      title: "kawai-downloader",
       type: "error",
     });
     this.allowQuit = true;

@@ -1,4 +1,4 @@
-import { Box, Button, Stack, Surface, Text } from "@kawaikara/kawai-ui";
+import { Box, Button, Flex, Stack, Surface, Text } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
 import { Caption } from "./Caption";
 
@@ -14,9 +14,12 @@ export function RangeEditor() {
             {t("range.fullVideo")}
           </Text>
         </Stack>
-        <Button id="resetSelectionButton" variant="ghost" size="sm">
-          {t("range.reset")}
-        </Button>
+        <Flex gap="sm">
+          <Button id="resetSelectionButton" variant="ghost" size="sm">
+            {t("range.reset")}
+          </Button>
+          <Button id="addSegmentButton" size="sm">{t("segments.add")}</Button>
+        </Flex>
       </Surface>
 
       <Surface padding="sm" radius="md" className="marker-row">
