@@ -1,7 +1,7 @@
 {
   "name": "yt-section-downloader",
   "version": "0.1.0",
-  "description": "Electron app for previewing YouTube and CHZZK videos and downloading selected clips.",
+  "description": "Electron app for previewing videos supported by yt-dlp and downloading selected clips.",
   "main": "build/main/main.js",
   "type": "commonjs",
   "packageManager": "pnpm@10.33.0",
@@ -41,7 +41,7 @@
     "build:dir": "node scripts/build.cjs --dir",
     "build:dir:win": "node scripts/build.cjs --platform win32 --arch x64 --dir",
     "build:dir:mac": "node scripts/build.cjs --platform darwin --dir",
-    "test:build": "node --test tests/build.test.cjs",
+    "test:build": "node --test tests/build.test.cjs tests/release.test.cjs",
     "binaries:prepare": "node scripts/prepare-binaries.cjs",
     "release:manifest": "node generate-release-manifest.cjs"
   },

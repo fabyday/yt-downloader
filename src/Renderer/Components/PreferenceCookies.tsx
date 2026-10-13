@@ -129,9 +129,10 @@ export function PreferenceCookies() {
     <Stack gap="sm">
       <Text weight="semibold">{t("cookies.title")}</Text>
       <Select id="cookieSiteSelect" label={t("cookies.site")} value={site} disabled={busy || closeBrowserAction !== null}
-        options={[{ value: "youtube", label: "YouTube" }, { value: "chzzk", label: t("source.chzzk") }]}
+        options={[{ value: "youtube", label: "YouTube" }, { value: "chzzk", label: t("source.chzzk") }, { value: "generic", label: t("source.generic") }]}
         onValueChange={value => { setSite(value as CookieSite); setError(null); setNotice(null); }} />
-      <Text size="sm" tone="muted">{t(site === "chzzk" ? "cookies.chzzkGuide" : "cookies.description")}</Text>
+      <Text size="sm" tone="muted">{t(site === "generic" ? "cookies.genericGuide" : site === "chzzk" ? "cookies.chzzkGuide" : "cookies.description")}</Text>
+      {site !== "generic" && <>
       <Text size="sm" tone="muted">{t("cookies.extractGuide")}</Text>
       <Select label={t("cookies.browser")} value={browser} disabled={busy}
         options={COOKIE_BROWSERS.filter((value) => value !== "safari" || platform === "darwin")
@@ -151,21 +152,22 @@ export function PreferenceCookies() {
         {manualProfile && <Input label={t("cookies.profileManual")} value={profile} disabled={busy}
           placeholder={t("cookies.profilePlaceholder")} onChange={event => setProfile(event.target.value)} />}
       </Stack>}
+      </>}
       <Text size="sm" aria-live="polite">{status
         ? t(selectedStatus?.configured ? "cookies.configured" : "cookies.none", { count: selectedStatus?.count ?? 0 })
         : t("cookies.loading")}</Text>
-      <Text size="sm" className="cookie-application-status" aria-live="polite">
+      {site !== "generic" && <><Text size="sm" className="cookie-application-status" aria-live="polite">
         {t(site === "chzzk" ? selectedStatus?.loginCookiesPresent ? "cookies.chzzkLoginPresent" : "cookies.chzzkLoginMissing"
           : status?.previewError ? "cookies.previewFailed" : status?.previewApplied ? "cookies.previewApplied" : "cookies.previewNotApplied")}
       </Text>
       <Text size="sm" className="cookie-browser-status" aria-live="polite">{t(checkingError ? "cookies.processCheckFailed"
         : browserRunning === null ? "cookies.checkingBrowser"
-        : browserRunning ? "cookies.browserRunning" : "cookies.browserReady")}</Text>
+        : browserRunning ? "cookies.browserRunning" : "cookies.browserReady")}</Text></>}
       <Flex gap="sm" wrap className="cookie-actions">
-        <Button aria-busy={busy} disabled={busy} onClick={() => void change("browser")}>{t("cookies.extract")}</Button>
+        {site !== "generic" && <Button aria-busy={busy} disabled={busy} onClick={() => void change("browser")}>{t("cookies.extract")}</Button>}
         <Button variant="secondary" disabled={busy} onClick={() => void change("file")}>{t("cookies.importFile")}</Button>
         <Button variant="secondary" disabled={busy || (!selectedStatus?.configured && !error && !selectedStatus?.error)} onClick={() => void change("clear")}>{t("cookies.clear")}</Button>
-        <Button variant="ghost" onClick={() => void window.ytClipper.openExternalUrl(site === "chzzk" ? "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" : "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies")}>
+        <Button variant="ghost" onClick={() => void window.ytClipper.openExternalUrl(site !== "youtube" ? "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" : "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies")}>
           {t("cookies.help")}
         </Button>
       </Flex>
@@ -173,7 +175,7 @@ export function PreferenceCookies() {
       <div className="cookie-feedback" role="status" aria-live="polite" aria-atomic="true">
         <Text size="sm">{busy && !closeBrowserAction ? t("cookies.working") : error ? t(error) : notice ? t(notice) : "\u00a0"}</Text>
       </div>
-      {platform === "darwin" && <Stack gap="sm" className="cookie-permission-help">
+      {site !== "generic" && platform === "darwin" && <Stack gap="sm" className="cookie-permission-help">
         <Text size="sm" tone="muted">{t("cookies.macPermissionHelp")}</Text>
         {development && <Text size="sm" tone="muted">{t("cookies.developmentPermissions")}</Text>}
         {development && runtimeAppPath && <Text size="xs" className="cookie-runtime-path">{runtimeAppPath}</Text>}

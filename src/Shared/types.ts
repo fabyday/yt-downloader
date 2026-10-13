@@ -124,7 +124,7 @@ export interface CookieStatus {
 }
 
 export type PreviewResult = { ok: true; url: string; audioUrl?: string; title: string; videoId: string; transport?: "hls"; duration?: number }
-  | { ok: false; error: "preview.expired" | "preview.denied" | "preview.unavailable" | "preview.failed" | "preview.liveUnsupported" };
+  | { ok: false; title?: string; duration?: number; error: "preview.expired" | "preview.denied" | "preview.unavailable" | "preview.failed" | "preview.liveUnsupported" | "preview.collectionUnsupported" | "preview.drmUnsupported" };
 
 export interface YtDlpUpdateStatus {
   status: "checking" | "downloading" | "current" | "updated" | "error" | "unavailable" | "managed";

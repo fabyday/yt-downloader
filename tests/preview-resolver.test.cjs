@@ -24,6 +24,8 @@ test('private-video cookie-scoped CDN is accepted for muxed and split streams', 
 test('errors distinguish expired cookies from access denial without leaking stderr', async () => {
   assert.deepEqual(previewFailure('The provided YouTube account cookies are no longer valid. They have likely been rotated.'), {ok:false,error:'preview.expired'});
   assert.deepEqual(previewFailure('Private video secret-cookie'), {ok:false,error:'preview.denied'});
+  assert.deepEqual(previewFailure('The web client only works when logged-in.'), {ok:false,error:'preview.denied'});
+  assert.deepEqual(previewFailure('This video is DRM protected'), {ok:false,error:'preview.drmUnsupported'});
   assert.deepEqual(await resolvePreview('--injection', {command:'not-run',nodeRuntimePath:''}), {ok:false,error:'preview.failed'});
 });
 test('pairs split H.264 and AAC, never silently serves video without sound', () => {

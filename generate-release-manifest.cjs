@@ -6,7 +6,7 @@ const packageJson = require("./package.json");
 const args = process.argv.slice(2);
 if (args.length && (args.length !== 2 || args[0] !== "--dir")) throw new Error("Usage: pnpm release:manifest --dir dist/<platform>-<arch>");
 const distDirectory = path.resolve(__dirname, args[1] || `dist/${process.platform}-${process.arch}`);
-const repository = "fabyday/yt-downloader";
+const repository = process.env.GITHUB_REPOSITORY || "fabyday/yt-downloader";
 
 const artifacts = fs
   .readdirSync(distDirectory, { withFileTypes: true })
@@ -59,7 +59,7 @@ function createArtifact(filename) {
     platform,
     arch,
     kind,
-    url: `https://github.com/${repository}/releases/latest/download/${encodeURIComponent(filename)}`,
+    url: `https://github.com/${repository}/releases/download/v${packageJson.version}/${encodeURIComponent(filename)}`,
     sha256: crypto
       .createHash("sha256")
       .update(fs.readFileSync(filePath))

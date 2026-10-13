@@ -1,6 +1,6 @@
 # kawai-downloader
 
-A desktop app for previewing YouTube and CHZZK videos, selecting precise time ranges, and downloading clips on macOS and Windows.
+A desktop app for previewing videos, selecting precise time ranges, and downloading clips with yt-dlp on macOS and Windows.
 
 [한국어](Docs/READMEKR.MD)
 
@@ -13,7 +13,7 @@ A desktop app for previewing YouTube and CHZZK videos, selecting precise time ra
 
 ## Usage
 
-1. Open the app and paste a YouTube video or CHZZK replay/upload URL.
+1. Open the app and paste an individual video URL supported by yt-dlp.
 2. Click **Load**, then set the start and end points. Use **Add section** to save multiple ranges.
 3. Open **Download**, choose a folder and output settings, then add the job to the queue.
 4. Use **Space** to play/pause, **A/S** to mark start/end, and **Q/W/E** to change the selection rule.
@@ -21,7 +21,14 @@ A desktop app for previewing YouTube and CHZZK videos, selecting precise time ra
 
 Use **Show sections** to toggle the list beside the video. Shortcuts can be changed or reset in Preferences.
 
-CHZZK support currently covers `/video/` URLs, not live recording or clip-only URLs.
+Public HTTP(S) video URLs are passed to the installed yt-dlp, including its generic extractor;
+the app does not maintain a fixed site allowlist. See [yt-dlp's supported sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
+Support is not guaranteed: site changes, login requirements, region restrictions, and codecs can prevent playback or download.
+Live recording, playlists/collections, and DRM-protected media are not supported by this clip editor.
+Native previews require compatible HTTPS MP4/HLS streams; cookies/custom headers or CORS may prevent preview even when downloads work.
+When extraction provides a duration but no playable preview, the full-video download range remains available.
+For other sites, use **Preferences → Cookies → Other sites** to import a site-scoped Netscape cookie file.
+These cookies stay separate from YouTube/CHZZK and are not injected into the preview browser.
 Download only content you own or have permission to save. Never share your cookies.
 
 ## Documentation

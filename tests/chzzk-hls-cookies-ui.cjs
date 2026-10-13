@@ -7,6 +7,10 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const os=require('node:os');
 const {execFileSync}=require('node:child_process');
+const generic=process.argv.includes('--generic');
+const mediaHost=generic?'media.example.com':'fixture.pstatic.net';
+const sourceUrl=generic?'https://example.com/watch/1980':'https://chzzk.naver.com/video/1980';
+const sourceKey=generic?'web:'+sourceUrl:'chzzk:1980';
 process.env.UI_HARNESS_PORT='0';
 const server=require('./ui-harness.cjs');
 const ready=server.listening?Promise.resolve():once(server,'listening');
@@ -23,7 +27,7 @@ app.whenReady().then(async()=>{
     const requested=[];
     await session.fromPartition(partition).protocol.handle('https',async request=>{
       const url=new URL(request.url);
-      if(url.hostname!=='fixture.pstatic.net'||!/^\/(fixture\.m3u8|segment\d+\.ts)$/.test(url.pathname))return new Response('',{status:404});
+      if(url.hostname!==mediaHost||!/^\/(fixture\.m3u8|segment\d+\.ts)$/.test(url.pathname))return new Response('',{status:404});
       requested.push(url.pathname);
       return new Response(await fs.readFile(path.join(scratch,path.basename(url.pathname))),{headers:{
         'Content-Type':url.pathname.endsWith('.m3u8')?'application/vnd.apple.mpegurl':'video/mp2t',
@@ -36,8 +40,8 @@ app.whenReady().then(async()=>{
     const result=await win.webContents.executeJavaScript(`(async()=>{
       const wait=ms=>new Promise(r=>setTimeout(r,ms)),el=id=>document.getElementById(id);
       while(!el('urlInput'))await wait(50);
-      window.mockPreviewResult={ok:true,url:'https://fixture.pstatic.net/fixture.m3u8',transport:'hls',title:'CHZZK fixture',videoId:'chzzk:1980'};
-      el('urlInput').value='https://chzzk.naver.com/video/1980';el('loadButton').click();
+      window.mockPreviewResult={ok:true,url:${JSON.stringify('https://'+mediaHost+'/fixture.m3u8')},transport:'hls',title:'Media fixture',videoId:${JSON.stringify(sourceKey)}};
+      el('urlInput').value=${JSON.stringify(sourceUrl)};el('loadButton').click();
       let video;
       for(let i=0;i<500;i++){
         video=document.querySelector('video.native-preview');

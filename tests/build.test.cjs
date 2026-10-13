@@ -50,7 +50,8 @@ test('CI installs pnpm before enabling its cache; no local dependency override',
   // electron-builder merges resource arrays; a legacy default would overwrite native binaries.
   assert.equal(require('../package.json').build.extraResources, undefined);
   const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/build.yml'), 'utf8');
-  assert.ok(workflow.indexOf('uses: pnpm/action-setup') < workflow.indexOf('uses: actions/setup-node'));
+  const packageJob = workflow.slice(workflow.indexOf('\n  package:'));
+  assert.ok(packageJob.indexOf('uses: pnpm/action-setup') < packageJob.indexOf('uses: actions/setup-node'));
   const workspace = fs.readFileSync(path.join(__dirname, '../pnpm-workspace.yaml'), 'utf8');
   const lock = fs.readFileSync(path.join(__dirname, '../pnpm-lock.yaml'), 'utf8');
   assert.doesNotMatch(workspace + lock, /link:|D:\//);

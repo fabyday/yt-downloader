@@ -721,7 +721,7 @@ function loadVideoFromInput(): void {
   createOrLoadPlayer(videoId, link.timeRange);
   updateDownloadButtonLabel();
   if (!elements.basenameInput.value.trim()) {
-    elements.basenameInput.value = `clip-${videoId.replace(":", "-")}`;
+    elements.basenameInput.value = videoId.startsWith("web:") ? `clip-${parseVideoSource(elements.urlInput.value)?.id ?? "video"}-${Date.now()}` : `clip-${videoId.replace(":", "-")}`;
   }
 }
 
@@ -755,6 +755,9 @@ async function loadAuthenticatedPreview(videoId: string, generation: number): Pr
     const cached = previewSources.get(videoId);
     const result = cached && cached.expires > Date.now() ? cached.result : await window.ytClipper.resolvePreview(videoId);
     if (generation !== previewGeneration) return;
+    // Metadata is useful even when Chromium cannot play the extracted codec/transport.
+    if (result.duration) updateDuration(result.duration);
+    if (result.title) updateVideoMeta(result.title);
     if (!result.ok) { setPreviewMessage(result.error); setProgressLabel(t(result.error)); return; }
     if (!cached || cached.expires <= Date.now()) {
       if (previewSources.size >= 8) previewSources.delete(previewSources.keys().next().value!);
@@ -803,7 +806,7 @@ function createOrLoadPlayer(
   }
   ensurePlayerPlaceholder();
   state.playerReady = false;
-  if (videoId.startsWith("chzzk:") || nativePreviewVideos.has(videoId)) {
+  if (videoId.startsWith("web:") || videoId.startsWith("chzzk:") || nativePreviewVideos.has(videoId)) {
     void loadAuthenticatedPreview(videoId, generation);
     return;
   }
@@ -2237,7 +2240,7 @@ function clampProgress(value: number): number {
   return Math.max(0, Math.min(1, numeric));
 }
 
-function updateDuration(): void {
+function updateDuration(metadataDuration?: number): void {
   const loadedVideoId = state.player?.getVideoData?.().video_id;
   if (
     state.expectedVideoId &&
@@ -2247,7 +2250,7 @@ function updateDuration(): void {
     return;
   }
 
-  const duration = state.player?.getDuration?.() || 0;
+  const duration = metadataDuration ?? state.player?.getDuration?.() ?? 0;
   if (!Number.isFinite(duration) || duration <= 0) {
     return;
   }
@@ -2280,9 +2283,9 @@ function updateDuration(): void {
   renderTimeline();
 }
 
-function updateVideoMeta(): void {
+function updateVideoMeta(metadataTitle?: string): void {
   const data = state.player?.getVideoData?.();
-  const title = data?.title?.trim() || "";
+  const title = (metadataTitle ?? data?.title)?.trim() || "";
 
   if (!title || title === state.videoTitle) {
     return;
@@ -2791,7 +2794,7 @@ function parseSourceLink(input: string): {
     const url = new URL(input.trim());
     return {
       videoId: source.key,
-      timeRange: getYouTubeLinkTimeRange(url)
+      timeRange: source.site === "youtube" ? getYouTubeLinkTimeRange(url) : null
     };
   } catch {
     return { videoId: null, timeRange: null };

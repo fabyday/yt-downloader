@@ -148,8 +148,15 @@ for FFmpeg and its enabled codecs before publishing.
 ## GitHub Actions
 
 [The Build workflow](../.github/workflows/build.yml) runs **only manually**:
-**Actions → Build → Run workflow**, select a branch, then run. Pushes and pull requests do not
-start a build. Each run builds all four targets below.
+**Actions → Build → Run workflow**. Select the branch containing this workflow, then optionally
+enter **source_ref**: a branch name, tag, or full commit SHA to build. Leave it empty to build the
+selected workflow branch. Pushes and pull requests do not start a build.
+
+The selected source's `package.json` version must be strictly newer than **every** existing SemVer
+tag and release (including drafts and prereleases). Equal/lower versions or API lookup failures
+fail before packaging. An initial release with no existing versions is allowed. Build metadata
+does not increase SemVer precedence. Local `pnpm build` remains repeatable without this release gate.
+The source is resolved once to an exact SHA; all four targets build that same commit.
 
 It installs pnpm before setting up Node.js and its pnpm cache, installs the frozen lockfile,
 runs build-configuration tests, then invokes the **same** `pnpm build` script used locally.
@@ -164,6 +171,23 @@ runs build-configuration tests, then invokes the **same** `pnpm build` script us
 Download `kawai-downloader-<platform>-<arch>` from the completed run's Artifacts.
 Installers and `release-manifest.json` are retained for 14 days.
 
-The workflow does not automatically sign/notarize apps or publish GitHub Releases.
-These are unsigned test artifacts; OS trust warnings may appear. The manifest's release URLs are
-intended for later publication under matching filenames, not links to Actions artifacts.
+After **all four** targets succeed, the workflow rechecks the version, creates `v<package.json version>`
+at the selected commit (never force-updating a tag), and creates a **Draft Release** with all eight
+installers plus one combined SHA-256 `release-manifest.json`. Download URLs point to this exact version.
+The run summary links to the draft. Open **Releases** while signed in with repository write access,
+review the assets, then click **Publish release**. Drafts are not public and do not appear in the app's
+latest-release update check; prereleases also stay outside the stable update channel.
+
+The default `GITHUB_TOKEN` has `contents: write` only in validation/release jobs; packaging jobs have
+read-only access. Repository policy must permit release creation. If publishing a selected commit
+with workflow-file changes relative to the default branch requires additional permissions, configure
+the optional **RELEASE_TOKEN** Actions secret with repository Contents and Workflows write access.
+Otherwise the built-in token is sufficient. The script uses the GitHub CLI preinstalled on Ubuntu runners.
+
+Release runs are serialized. On upload/API failure, the job fails; a partially created tag/draft is
+kept for inspection, never automatically deleted or published. To retry the same version, manually
+remove only that failed draft and its tag after checking them, or increment the version and rerun.
+Existing versions are intentionally not overwritten. This workflow must be available on the default
+branch for GitHub's manual-run UI to discover it.
+
+The workflow does not sign/notarize apps. These are unsigned packages; OS trust warnings may appear.

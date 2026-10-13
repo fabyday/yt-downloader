@@ -75,7 +75,7 @@ export class NativePreview implements YouTubePlayer {
       const { default: Hls } = await import("hls.js");
       if (this.disposed || this.failed) return;
       if (!Hls.isSupported()) { fail(); return; }
-      const site = this.source.videoId.startsWith("chzzk:") ? "chzzk" : "youtube";
+      const site = this.source.videoId.startsWith("web:") ? "generic" : this.source.videoId.startsWith("chzzk:") ? "chzzk" : "youtube";
       this.hls = new Hls({ maxBufferLength: 30, backBufferLength: 30,
         xhrSetup: (_xhr, url) => {
           if (!isPreviewMediaUrl(url, site)) throw new Error("Unsupported media host");

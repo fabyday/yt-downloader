@@ -79,6 +79,13 @@ async function main() {
     await client.request("cookies.clear", {});
     assert.equal((await client.request("cookies.status", {})).sites.chzzk.configured, true);
     await client.request("cookies.clear", { site: "chzzk" });
+    await client.request("cookies.import-data", { site: "generic", format: "records", cookies: [
+      { domain: ".vimeo.com", name: "session", value: "fixture-only", secure: true },
+    ] });
+    assert.deepEqual((await client.request("cookies.status", {})).sites.generic, { configured: true, count: 1 });
+    assert.equal(await client.request("cookies.preview", {}), null, 'Generic credentials never enter browser preview IPC');
+    await assert.rejects(client.request("cookies.import-browser", { browser: "chrome", site: "generic" }), /cookies.genericFileOnly/);
+    await client.request("cookies.clear", { site: "generic" });
     await assert.rejects(client.request("cookies.clear", { site: "../youtube" }), /cookies.invalidSite/);
     const updateStatus = await client.request("dependency.update-status", {});
     assert.equal(typeof updateStatus.status, 'string');

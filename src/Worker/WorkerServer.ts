@@ -43,11 +43,15 @@ export async function startWorker(): Promise<void> {
   const cookieDirectory = await prepareCookieDirectory(options.stateDirectory);
   const cookies = new CookieStore(cookieDirectory);
   const chzzkCookies = new CookieStore(cookieDirectory, "chzzk");
-  const cookieStore = (site: unknown) => cookieSite(site) === "chzzk" ? chzzkCookies : cookies;
+  const genericCookies = new CookieStore(cookieDirectory, "generic");
+  const cookieStore = (site: unknown) => {
+    const selected = cookieSite(site);
+    return selected === "generic" ? genericCookies : selected === "chzzk" ? chzzkCookies : cookies;
+  };
   const cookieStatus = async (): Promise<CookieStatus> => {
-    const [youtube, chzzk] = await Promise.all([cookies.getStatus(), chzzkCookies.getStatus()]);
-    return { configured: youtube.configured || chzzk.configured, count: youtube.count + chzzk.count,
-      sites: { youtube, chzzk }, ...(youtube.error || chzzk.error ? { error: "cookies.readFailed" as const } : {}) };
+    const [youtube, chzzk, generic] = await Promise.all([cookies.getStatus(), chzzkCookies.getStatus(), genericCookies.getStatus()]);
+    return { configured: youtube.configured || chzzk.configured || generic.configured, count: youtube.count + chzzk.count + generic.count,
+      sites: { youtube, chzzk, generic }, ...(youtube.error || chzzk.error || generic.error ? { error: "cookies.readFailed" as const } : {}) };
   };
   let browserImport: Promise<CookieStatus> | null = null;
   let updateStatus: YtDlpUpdateStatus = { status: "managed", version: null };

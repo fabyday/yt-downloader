@@ -552,6 +552,9 @@ function buildYtDlpArgs({
     "--ignore-config",
     ...ytDlpSiteArgs(request.url),
     "--no-playlist",
+    // A collection URL must never turn a single clip request into an unbounded batch.
+    "--playlist-items", "1",
+    "--match-filters", "!is_live & !has_drm",
     "--newline",
     "--progress",
     "--downloader-args",
@@ -938,7 +941,7 @@ function getDownloadFailureMessage(error: unknown, locale: SupportedLocale, url?
   const detail = getErrorMessage(error);
   if (detail === "cookies.readFailed") return t(locale, detail);
   if (/HTTP Error 403|403 Forbidden/i.test(detail)) {
-    return t(locale, url && parseVideoSource(url)?.site === "chzzk" ? "preview.denied" : "main.error.youtubeForbidden");
+    return t(locale, url && parseVideoSource(url)?.site !== "youtube" ? "preview.denied" : "main.error.youtubeForbidden");
   }
   if (/the page needs to be reloaded|nsig extraction failed|no supported javascript runtime|javascript challenge|challenge solver/i.test(detail)) {
     return t(locale, "main.error.youtubeExtraction");

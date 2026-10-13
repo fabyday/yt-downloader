@@ -22,20 +22,63 @@ test('CHZZK plugin is scoped to CHZZK and included as an unpacked build asset', 
   assert.ok(require('../package.json').build.asarUnpack.includes('build/worker/yt-dlp-plugins/**/*'));
 });
 
-test('sources and download validation share a strict YouTube/CHZZK allowlist', async () => {
+test('sources and download validation accept public extractor URLs, reject local/unsafe inputs', async () => {
   const source = parseVideoSource('https://chzzk.naver.com/video/1980?t=10');
   assert.deepEqual(source, {site:'chzzk',id:'1980',key:'chzzk:1980',url:'https://chzzk.naver.com/video/1980'});
   assert.deepEqual(previewSource(source.key),source);
   assert.equal(parseVideoSource('https://youtu.be/K7bx0zyTYFM').site,'youtube');
-  for (const url of ['file:///etc/passwd','http://chzzk.naver.com/video/1980','https://chzzk.naver.com.evil.test/video/1980',
+  for (const url of ['file:///etc/passwd','https://chzzk.naver.com.evil.test/video/1980',
     'https://user:pass@chzzk.naver.com/video/1980','https://chzzk.naver.com:444/video/1980',
-    'https://127.0.0.1/video/1980','https://chzzk.naver.com/video/1980/other','https://chzzk.naver.com/live/abcd']) {
+    'https://127.0.0.1/video/1980','https://localhost/a','https://192.168.0.1/a','https://2130706433/a',
+    'https://[::1]/a','https://machine.local/a','ftp://example.com/a','--exec=whoami','https://chzzk.naver.com/live/abcd']) {
     assert.equal(parseVideoSource(url),null,url);
     assert.throws(()=>normalizeDownloadRequest({url,locale:'en',segments:[{start:0,end:1}]}));
   }
   assert.equal(normalizeDownloadRequest({url:source.url,locale:'en',segments:[{start:1,end:2}]}).url,source.url);
   assert.deepEqual(await resolvePreview('https://127.0.0.1/',{command:'not-run'}),{ok:false,error:'preview.failed'});
   assert.throws(()=>cookieSite('../youtube'),/invalidSite/);
+});
+
+test('generic sources retain queries, round trip through preview IPC, and do not enable CHZZK plugins', () => {
+  for (const url of ['https://vimeo.com/76979871', 'https://www.twitch.tv/videos/12345',
+    'https://www.bilibili.com/video/BV1abc', 'https://example.com/watch?asset=123&signature=fixture',
+    'http://example.com/video', 'https://chzzk.naver.com/clips/example']) {
+    const source = parseVideoSource(url);
+    assert.equal(source.site, 'generic');
+    assert.deepEqual(previewSource(source.key), source);
+    assert.equal(normalizeDownloadRequest({url, segments:[{start:0,end:3}]}).url,url);
+    assert.deepEqual(ytDlpSiteArgs(url), []);
+  }
+  assert.equal(previewSource('web:https://127.0.0.1/a'), null);
+});
+
+test('generic previews support HTTPS MP4/HLS; incompatible streams retain metadata for download', () => {
+  const key = parseVideoSource('https://vimeo.com/76979871').key;
+  const media = {url:'https://video.example.com/fixture.mp4',protocol:'https',ext:'mp4',height:720,vcodec:'avc1.42',acodec:'mp4a.40.2'};
+  assert.equal(selectPreview({title:'Fixture',duration:30,formats:[media]},key).url,media.url);
+  assert.equal(selectPreview({formats:[{...media,protocol:'m3u8_native'}]},key).transport,'hls');
+  assert.deepEqual(selectPreview({title:'Fixture',duration:30,formats:[{...media,vcodec:'hevc'}]},key),
+    {ok:false,error:'preview.unavailable',title:'Fixture',duration:30});
+  assert.equal(selectPreview({_type:'playlist',entries:[]},key).error,'preview.collectionUnsupported');
+  assert.equal(selectPreview({is_live:true},key).error,'preview.liveUnsupported');
+  assert.equal(selectPreview({has_drm:true},key).error,'preview.drmUnsupported');
+  for (const url of ['file:///secret','http://video.example.com/a','https://127.0.0.1/a','https://[::1]/a','https://user:password@example.com/a']) {
+    assert.equal(isPreviewMediaUrl(url,'generic'),false);
+    assert.equal(selectPreview({formats:[{...media,url}]},key).ok,false);
+  }
+});
+
+test('generic cookies are explicit file imports and isolated from YouTube/CHZZK', async t => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'kawai-generic-cookies-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const generic = new CookieStore(root,'generic'), youtube = new CookieStore(root);
+  await generic.import(file(row('.vimeo.com','session'),row('localhost','secret'),row('127.0.0.1','secret')));
+  assert.deepEqual(await generic.getStatus(),{configured:true,count:1});
+  assert.equal((await youtube.getStatus()).configured,false);
+  const snapshot=await generic.createSnapshot();
+  assert.match(await fs.readFile(snapshot.path,'utf8'),/vimeo\.com/);
+  await snapshot.dispose();
+  assert.throws(()=>require('../src/Shared/cookies.ts').browserCookieSpec({browser:'chrome',site:'generic'}),/genericFileOnly/);
 });
 
 test('CHZZK preview picks bounded MP4 or HLS and rejects DRM/live/untrusted hosts', () => {

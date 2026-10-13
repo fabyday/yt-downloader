@@ -2,16 +2,50 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Branch, tag, or full commit SHA (empty = selected workflow branch)'
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: draft-release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.version.outputs.sha }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: ci
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Validate package version against all tags and releases
+        id: version
+        run: node ci/scripts/release.cjs validate
+        env:
+          SOURCE_DIRECTORY: source
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+
   package:
+    needs: validate
     name: ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -24,12 +58,13 @@ jobs:
           - { runner: macos-15-intel, platform: darwin, arch: x64 }
           - { runner: macos-15, platform: darwin, arch: arm64 }
     env:
-      # CI artifacts are unsigned test packages, never published automatically.
+      # Installers remain unsigned; the release stays a draft until manually published.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
 
       # pnpm must exist before setup-node tries to locate/cache its store.
@@ -70,3 +105,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  release:
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: kawai-downloader-*
+          path: release-assets
+          merge-multiple: false
+      - name: Create version tag and draft release with installers
+        run: node scripts/release.cjs publish
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}

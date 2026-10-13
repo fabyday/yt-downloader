@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { EOL } from "node:os";
+import { isPublicWebUrl } from "../Shared/VideoSource";
 import type { CookieStatus } from "../Shared/types";
 import { cookieImportToNetscape, cookieSite, type CookieSite, type CookieImportData } from "../Shared/cookies";
 
@@ -75,7 +76,7 @@ export function normalizeCookieFile(
       throw new Error("cookies.invalid");
     }
     const domain = fields[0].replace(/^\./, "").toLowerCase();
-    const allowed = site === "youtube"
+    const allowed = site === "generic" ? /^[a-z0-9.-]+$/.test(domain) && isPublicWebUrl(`https://${domain}/`) : site === "youtube"
       ? ["youtube.com", "google.com", "youtu.be"].some(root => domain === root || domain.endsWith(`.${root}`))
       : domain === "chzzk.naver.com" || domain.endsWith(".chzzk.naver.com") ||
         (domain === "naver.com" && ["NID_AUT", "NID_SES"].includes(fields[5]));

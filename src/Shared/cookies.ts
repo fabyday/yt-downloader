@@ -1,8 +1,8 @@
-import type { VideoSite } from "./VideoSource";
-export type CookieSite = VideoSite;
+export type CookieSite = "youtube" | "chzzk" | "generic";
 export function cookieSite(value: unknown): CookieSite {
   if (value === undefined || value === "youtube") return "youtube";
   if (value === "chzzk") return "chzzk";
+  if (value === "generic") return "generic";
   throw new Error("cookies.invalidSite");
 }
 export const COOKIE_BROWSERS = ["chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi", "safari"] as const;
@@ -45,6 +45,8 @@ export function cookieImportToNetscape(data: CookieImportData): string {
 
 export function browserCookieSpec(value: BrowserCookieOptions): string {
   cookieSite(value?.site);
+  // Generic credentials are explicitly imported as a file; never retain an entire browser jar.
+  if (value?.site === "generic") throw new Error("cookies.genericFileOnly");
   if (!value || !COOKIE_BROWSERS.includes(value.browser)) throw new Error("cookies.invalidBrowser");
   if (value.profile !== undefined && typeof value.profile !== "string") throw new Error("cookies.invalidProfile");
   const profile = value.profile?.trim() ?? "";

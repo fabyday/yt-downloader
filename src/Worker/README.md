@@ -50,7 +50,11 @@ FFmpeg는 시작 시 자동 갱신하지 않습니다. [빌드 문서](../../Doc
 치지직의 `loginCookiesPresent`는 NID_AUT/NID_SES 존재 여부일 뿐 서버 인증 성공은 아닙니다.
 `cookies.preview`는 계속 YouTube 쿠키만 반환합니다. 치지직 쿠키는 Worker 내부에서
 해당 사이트 미리보기 추출·다운로드용 스냅샷에만 사용합니다.
-`preview.resolve`의 videoId는 기존 YouTube ID 또는 `chzzk:숫자ID`를 받습니다.
+`preview.resolve`의 videoId는 기존 YouTube ID, `chzzk:숫자ID`, 또는 `web:공개HTTP(S)URL`을 받습니다.
+일반 사이트는 yt-dlp가 판별합니다. `site: "generic"` 쿠키 저장소는 명시적인 파일/records 가져오기만 지원하고
+브라우저 전체 추출을 차단합니다. `cookies.status.sites.generic`으로 상태를 확인할 수 있습니다.
+미리보기 실패에도 title/duration이 있으면 전체 영상 다운로드 범위를 구성할 수 있습니다.
+URL 검사는 로컬 주소·IP 리터럴을 거부하지만 DNS 재바인딩/리다이렉트까지 차단하는 네트워크 샌드박스는 아닙니다.
 `{ format: "netscape", contents: "..." }` 또는
 `{ format: "records", cookies: [{ domain, path, name, value, secure, httpOnly, expirationDate }] }`
 형식을 받습니다. `expirationDate`는 Unix 초이며 생략 또는 -1은 세션 쿠키입니다.
