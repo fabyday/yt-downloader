@@ -11,6 +11,37 @@ yt-dlp로 영상을 불러오고, 원하는 구간을 정밀하게 선택해 다
 - 원본 유지, 편집용 출력 프리셋, 수동 FFmpeg 옵션
 - 단축키 변경, 사이트별 쿠키 가져오기, 한국어·영어·일본어 UI
 
+## 설치
+
+### macOS
+
+**Mac은 아래 설치 스크립트를 사용하세요.** Apple Silicon/Intel을 자동 구분하여 내려받고 설치합니다.
+Rosetta에서 실행해도 Apple Silicon 기종을 감지합니다.
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/fabyday/yt-downloader/main/install-mac.sh -o install-mac.sh
+# 실행 전에 스크립트를 확인하세요. 아래 설치 명령 중 하나를 선택합니다.
+bash install-mac.sh                 # 최신 공개 정식 버전
+bash install-mac.sh 0.1.0           # 특정 공개 버전 (예시)
+# bash install-mac.sh --version v0.1.0
+```
+
+공개된 사전 출시 버전도 버전 인자로 지정할 수 있습니다. Draft는 설치할 수 없습니다.
+릴리스 매니페스트의 SHA-256을 검증하고 `~/Applications/kawai-downloader.app`에 설치합니다.
+기존 앱은 삭제하지 않고 출력된 백업 경로에 보존합니다. 업데이트 전 앱을 완전히 종료하고,
+**sudo 없이** 실행하세요. 쓰기 권한이 있다면 `--dir /Applications`, 또는 원하는 절대 경로를 지정할 수 있습니다.
+
+설치 시 기본적으로 **해당 앱의 `com.apple.quarantine` 속성만 제거**합니다.
+이는 quarantine에 따른 최초 실행 검사를 우회하는 것이며, Apple 서명·공증이나 안전성을 보장하지 않습니다.
+저장소와 배포자를 신뢰할 때만 사용하세요. 체크섬도 배포자 자체의 신뢰성을 보증하지는 않습니다.
+보안 속성을 유지하려면 `--keep-quarantine`을 추가하세요. 설치 후 앱은 자동 실행하지 않습니다.
+[Apple 보안 안내](https://support.apple.com/ko-kr/102445)
+
+### Windows
+
+[Releases](https://github.com/fabyday/yt-downloader/releases)에서 CPU에 맞는 x64/ARM64 Setup 또는 Portable EXE를 받으세요.
+
 ## 사용법
 
 1. 앱을 열고 yt-dlp가 지원하는 개별 영상 주소를 입력합니다.

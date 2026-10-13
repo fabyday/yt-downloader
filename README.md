@@ -11,6 +11,38 @@ A desktop app for previewing videos, selecting precise time ranges, and download
 - Export original media or use editing-friendly presets and custom FFmpeg options.
 - Customize shortcuts, import site-specific cookies, and switch between English, Korean, and Japanese.
 
+## Installation
+
+### macOS
+
+**Use the macOS installer script** to download and install the release matching your Mac
+(Apple Silicon or Intel, including detection under Rosetta):
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/fabyday/yt-downloader/main/install-mac.sh -o install-mac.sh
+# Review the script before running it.
+bash install-mac.sh                 # Latest published stable release
+bash install-mac.sh 0.1.0           # Specific published version (example)
+# bash install-mac.sh --version v0.1.0
+```
+
+Choose one installation command above. Version arguments also accept published prereleases.
+Draft releases cannot be installed. The script checks the ZIP's SHA-256 against the release manifest,
+installs to `~/Applications/kawai-downloader.app`, and retains a backup of any existing app.
+Quit the app before upgrading. Run as your normal user, **not with sudo**.
+Use `--dir /Applications` if that directory is writable, or `--dir /absolute/custom/path`.
+
+By default, installation removes **only this app's `com.apple.quarantine` attribute**.
+This bypasses quarantine-triggered first-launch checks; it does not sign/notarize the app or guarantee
+that it is safe. Only run it if you trust this repository and release. The checksum detects a mismatch,
+not a compromised publisher. Use `--keep-quarantine` to retain normal macOS quarantine checks.
+The app is not launched automatically. See [Apple's security guidance](https://support.apple.com/en-us/102445).
+
+### Windows
+
+Download the matching x64/ARM64 Setup or Portable EXE from [Releases](https://github.com/fabyday/yt-downloader/releases).
+
 ## Usage
 
 1. Open the app and paste an individual video URL supported by yt-dlp.
