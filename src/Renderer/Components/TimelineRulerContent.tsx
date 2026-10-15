@@ -10,7 +10,7 @@ export function TimelineRulerContent() {
         <Box
           key={tick.id}
           position="absolute"
-          className={`timeline-ruler-tick ${tick.major ? "major" : "minor"}`}
+          className={`timeline-ruler-tick ${tick.major ? "major" : "minor"} label-${tick.align}`}
           style={{ left: tick.left }}
           aria-hidden="true"
         >

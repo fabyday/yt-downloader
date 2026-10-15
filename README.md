@@ -58,6 +58,8 @@ the app does not maintain a fixed site allowlist. See [yt-dlp's supported sites]
 Support is not guaranteed: site changes, login requirements, region restrictions, and codecs can prevent playback or download.
 Live recording, playlists/collections, and DRM-protected media are not supported by this clip editor.
 Native previews require compatible HTTPS MP4/HLS streams; cookies/custom headers or CORS may prevent preview even when downloads work.
+YouTube uses the same yt-dlp stream resolver and native player as other sites; the editor does not load the YouTube iframe player.
+Timeline ticks adapt to the visible time range and window width. While a seek buffers, the playhead keeps the requested position until the media seek completes.
 When extraction provides a duration but no playable preview, the full-video download range remains available.
 For other sites, use **Preferences → Cookies → Other sites** to import a site-scoped Netscape cookie file.
 These cookies stay separate from YouTube/CHZZK and are not injected into the preview browser.

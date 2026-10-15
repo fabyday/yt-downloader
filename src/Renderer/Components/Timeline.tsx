@@ -7,6 +7,7 @@ import {
 import { useI18n } from "../I18nProvider";
 import { TimelineRulerContent } from "./TimelineRulerContent";
 import { TimelineSegmentContent } from "./TimelineSegmentContent";
+import { VolumeControl } from "./VolumeControl";
 
 export function Timeline() {
   const { t } = useI18n();
@@ -24,6 +25,7 @@ export function Timeline() {
           <Text as="span" size="xs" tone="muted" id="timelineViewportLabel">
             --:--.--- – --:--.---
           </Text>
+          <VolumeControl />
           <Pressable
             id="timelineZoomOutButton"
             className="timeline-zoom-button"
@@ -55,57 +57,60 @@ export function Timeline() {
           </Text>
         </Flex>
       </Flex>
-      <Pressable
-        id="timelineRuler"
-        className="timeline-ruler"
-        cursor="grab"
-        radius="sm"
-        role="slider"
-        aria-label={t("timeline.dragRuler")}
-        title={t("timeline.dragRuler")}
-      >
-        <Box position="absolute" className="timeline-ruler-ticks">
-          <TimelineRulerContent />
-        </Box>
-        <Box position="absolute" id="timelineRulerPlayhead" className="timeline-ruler-playhead" />
-      </Pressable>
-      <Box id="timelineShell" position="relative" className="timeline-shell">
-        <div id="markerSplitTags" className="marker-split-tags hidden">
-          <button type="button" id="splitStartMarker" title={t("timeline.adjustStart")}>
-            <span>{t("range.start")}</span>
-          </button>
-          <button type="button" id="splitEndMarker" title={t("timeline.adjustEnd")}>
-            <span>{t("range.end")}</span>
-          </button>
-        </div>
-        <Box position="relative" className="timeline-track" aria-hidden="true">
-          <Box position="absolute" id="timelineSegments" className="timeline-segments">
-            <TimelineSegmentContent />
+      <Box className="timeline-surface" position="relative">
+        <Pressable
+          id="timelineRuler"
+          className="timeline-ruler"
+          cursor="grab"
+          radius="sm"
+          role="slider"
+          aria-label={t("timeline.dragRuler")}
+          title={t("timeline.dragRuler")}
+        >
+          <Box position="absolute" className="timeline-ruler-ticks">
+            <TimelineRulerContent />
           </Box>
-          <Box position="absolute" id="timelineRange" className="timeline-range hidden" />
-          <Box position="absolute" id="timelineFill" className="timeline-fill" />
+        </Pressable>
+        <Box id="timelineInteractionArea" className="timeline-interaction-area">
+          <Box id="timelineShell" position="relative" className="timeline-shell">
+            <div id="markerSplitTags" className="marker-split-tags hidden">
+              <button type="button" id="splitStartMarker" title={t("timeline.adjustStart")}>
+                <span>{t("range.start")}</span>
+              </button>
+              <button type="button" id="splitEndMarker" title={t("timeline.adjustEnd")}>
+                <span>{t("range.end")}</span>
+              </button>
+            </div>
+            <Box position="relative" className="timeline-track" aria-hidden="true">
+              <Box position="absolute" id="timelineSegments" className="timeline-segments">
+                <TimelineSegmentContent />
+              </Box>
+              <Box position="absolute" id="timelineRange" className="timeline-range hidden" />
+              <Box position="absolute" id="timelineFill" className="timeline-fill" />
+            </Box>
+            <Pressable
+              id="startMarkerHandle"
+              className="timeline-marker timeline-marker-start hidden"
+              aria-label={t("timeline.adjustStart")}
+            />
+            <Pressable
+              id="endMarkerHandle"
+              className="timeline-marker timeline-marker-end hidden"
+              aria-label={t("timeline.adjustEnd")}
+            />
+            <input
+              type="range"
+              id="timelineInput"
+              className="timeline-input"
+              min={0}
+              max={0}
+              step={0.01}
+              defaultValue={0}
+              aria-label={t("timeline.position")}
+              disabled
+            />
+          </Box>
         </Box>
-        <Pressable
-          id="startMarkerHandle"
-          className="timeline-marker timeline-marker-start hidden"
-          aria-label={t("timeline.adjustStart")}
-        />
-        <Pressable
-          id="endMarkerHandle"
-          className="timeline-marker timeline-marker-end hidden"
-          aria-label={t("timeline.adjustEnd")}
-        />
-        <input
-          type="range"
-          id="timelineInput"
-          className="timeline-input"
-          min={0}
-          max={0}
-          step={0.01}
-          defaultValue={0}
-          aria-label={t("timeline.position")}
-          disabled
-        />
         <Box
           id="currentTimeAnchor"
           position="absolute"

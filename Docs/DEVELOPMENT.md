@@ -22,7 +22,7 @@ Renderer UI는 React와 GitHub 커밋에 고정된 KawaiUI 패키지의 빌드 �
 
 - `src/Renderer/Components`: KawaiUI Primitive와 Component를 조합한 최소 UI 단위
 - `src/Renderer/Views`: Component를 조합해 사용자가 보는 화면을 구성하는 단위
-- `src/Renderer/app.ts`: YouTube 플레이어와 화면 상태를 연결하고 Main에 요청을 보내는 Renderer 어댑터
+- `src/Renderer/app.ts`: 공통 미디어 플레이어와 화면 상태를 연결하고 Main에 요청을 보내는 Renderer 어댑터
 - `src/Main`: Worker를 시작하거나 외부 Worker에 연결하고 Renderer IPC를 전달하는 호스트 어댑터
 - `src/Worker`: UI와 독립된 다운로드 엔진, 큐, 캐시, 상태 저장과 로컬 소켓 서버
 - `src/Shared/workerProtocol.ts`: Downloader와 Kawaikara 같은 외부 호스트가 공유할 Worker wire protocol
@@ -80,3 +80,24 @@ pnpm exec electron tests/chzzk-network-ui.cjs --network --download --video-id=15
 생성한 임시 미디어는 테스트 종료 시 정리합니다. 영상 공개 상태와 외부 서비스에 따라 실패할 수 있습니다.
 
 Worker 실행·연동 프로토콜은 [Worker README](../src/Worker/README.md)를 참고하세요.
+## 공통 플레이어·긴 영상 회귀 검사
+
+YouTube를 포함한 모든 소스는 `PreviewResolver` → `NativePreview` 경로를 사용합니다.
+`TimelineScale`은 표시 구간과 화면 폭으로 눈금 간격을 결정합니다. 렌더러는 드래그 중인 목표 위치를 유지하며,
+미디어의 `seeking`이 끝나고 목표 시간에 도달했을 때만 플레이헤드를 재생 시간에 동기화합니다.
+길이 메타데이터 갱신은 재생 위치를 초기화하지 않습니다.
+
+```sh
+node --require ts-node/register/transpile-only --test tests/native-preview.test.cjs tests/timeline-scale.test.cjs tests/preview-resolver.test.cjs
+pnpm bundle:renderer:dev
+pnpm exec electron tests/long-timeline-smoke.cjs --screenshot
+pnpm exec electron tests/timeline-keyboard-smoke.cjs
+pnpm exec electron tests/timeline-markers-smoke.cjs
+pnpm exec electron tests/timeline-controls-smoke.cjs --screenshot
+node --require ts-node/register/transpile-only --test tests/timeline-interaction.test.cjs
+```
+
+긴 영상 검사는 실제 렌더러와 Electron 레이아웃에서 100시간·640/900/1440px 조건, 지연 탐색,
+연속 탐색, 길이 갱신, 확대 후 좌표 매핑을 확인합니다. 미디어 타이밍은 테스트에서 모의합니다.
+실제 네트워크 재생 확인은 `pnpm exec electron tests/native-preview-ui-diagnostic.cjs --video=VIDEO_ID`로 별도 실행합니다.
+이 진단은 쿠키를 읽지 않으며 재생·80% 위치 탐색·캐시 재사용을 검사하고 영상 파일을 저장하지 않습니다.

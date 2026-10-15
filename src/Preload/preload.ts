@@ -44,8 +44,8 @@ const api: YtClipperApi = {
   createBrowserTab: () => ipcRenderer.invoke("tabs:create"),
   activateBrowserTab: (tabId) => ipcRenderer.invoke("tabs:activate", tabId),
   closeBrowserTab: (tabId) => ipcRenderer.invoke("tabs:close", tabId),
-  updateBrowserTabTitle: (title) =>
-    ipcRenderer.invoke("tabs:update-title", title),
+  updateBrowserTabTitle: (title, sourceKey) =>
+    ipcRenderer.invoke("tabs:update-title", title, sourceKey),
   openQueueWindow: () => ipcRenderer.invoke("window:open-queue"),
   getPreferences: () => ipcRenderer.invoke("preference:get"),
   updatePreferences: (preferences) =>

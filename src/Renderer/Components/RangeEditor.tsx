@@ -1,4 +1,4 @@
-import { Box, Button, Flex, Stack, Surface, Text } from "@kawaikara/kawai-ui";
+import { Box, Button, Flex, Stack, Text } from "@kawaikara/kawai-ui";
 import { useI18n } from "../I18nProvider";
 import { Caption } from "./Caption";
 
@@ -7,7 +7,7 @@ export function RangeEditor() {
 
   return (
     <Box as="section" className="markers" aria-label={t("range.label")}>
-      <Surface padding="sm" radius="md" className="markers-header">
+      <Box className="markers-header">
         <Stack gap="xs">
           <Caption>{t("range.label")}</Caption>
           <Text as="div" weight="semibold" id="rangeSummary" className="range-value">
@@ -20,9 +20,9 @@ export function RangeEditor() {
           </Button>
           <Button id="addSegmentButton" size="sm">{t("segments.add")}</Button>
         </Flex>
-      </Surface>
+      </Box>
 
-      <Surface padding="sm" radius="md" className="marker-row">
+      <Box className="marker-row">
         <Stack gap="xs">
           <Caption>{t("range.start")}</Caption>
           <Text
@@ -41,9 +41,9 @@ export function RangeEditor() {
         <Button id="setStartButton" variant="secondary" size="sm">
           {t("range.current")}
         </Button>
-      </Surface>
+      </Box>
 
-      <Surface padding="sm" radius="md" className="marker-row">
+      <Box className="marker-row">
         <Stack gap="xs">
           <Caption>{t("range.end")}</Caption>
           <Text
@@ -62,7 +62,7 @@ export function RangeEditor() {
         <Button id="setEndButton" variant="secondary" size="sm">
           {t("range.current")}
         </Button>
-      </Surface>
+      </Box>
     </Box>
   );
 }

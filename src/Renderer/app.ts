@@ -1,3 +1,6 @@
+import { buildTimelineTicks } from "./TimelineScale";
+import { nearestTimelineHandle, zoomViewportStart, type TimelineHandle, type ZoomPivot } from "../Shared/timelineInteraction";
+import { setPlaybackOptionsView } from "./viewStore";
 import type {
   DependencyStatus,
   DependencyStatuses,
@@ -43,15 +46,13 @@ import {
 } from "./viewStore";
 
 const LOOP_EPSILON = 0.05;
-// Shared by the YouTube iframe and the native preview adapter.
+// Playback state used by the common media adapter.
 const PLAYER_PLAYING = 1;
 const SEEK_SETTLE_EPSILON = 0.35;
-const SEEK_SETTLE_TIMEOUT_MS = 1200;
 const MARKER_PLAYHEAD_EPSILON = 0.01;
 const TIMELINE_MIN_ZOOM = 1;
 const TIMELINE_MAX_ZOOM = 64;
 const TIMELINE_ZOOM_STEP = 1.25;
-const TIMELINE_MAJOR_TICK_PIXELS = 90;
 const SEGMENT_COLOR_PALETTE = [
   [95, 188, 123],
   [88, 196, 221],
@@ -92,15 +93,9 @@ type MarkerKind = "start" | "end";
 type TimeDragKind = "playback" | MarkerKind;
 type TimelineInteraction = "scrub" | "marker" | "readout" | null;
 
-interface PendingPlayerRequest {
-  videoId: string;
-  initialRange: LinkTimeRange | null;
-  editorRestore: EditorSnapshot | null;
-}
-
 interface RendererState {
   selectionMode: SelectionMode;
-  player: YouTubePlayer | null;
+  player: PreviewPlayer | null;
   playerReady: boolean;
   currentTime: number;
   duration: number;
@@ -110,7 +105,6 @@ interface RendererState {
   rangeIsDefault: boolean;
   pendingLinkRange: LinkTimeRange | null;
   pendingEditorRestore: EditorSnapshot | null;
-  pendingPlayerRequest: PendingPlayerRequest | null;
   expectedVideoId: string | null;
   segments: TimelineSegment[];
   nextSegmentId: number;
@@ -120,7 +114,6 @@ interface RendererState {
   markerAttachedPlayhead: MarkerKind | null;
   timelineInteraction: TimelineInteraction;
   pendingSeekTime: number | null;
-  pendingSeekStartedAt: number;
   lastTimelineSeekAt: number;
   timelineViewportStart: number;
   timelineZoom: number;
@@ -199,7 +192,6 @@ const state: RendererState = {
   rangeIsDefault: true,
   pendingLinkRange: null,
   pendingEditorRestore: null,
-  pendingPlayerRequest: null,
   expectedVideoId: null,
   segments: [],
   nextSegmentId: 1,
@@ -209,7 +201,6 @@ const state: RendererState = {
   markerAttachedPlayhead: null,
   timelineInteraction: null,
   pendingSeekTime: null,
-  pendingSeekStartedAt: 0,
   lastTimelineSeekAt: 0,
   timelineViewportStart: 0,
   timelineZoom: TIMELINE_MIN_ZOOM,
@@ -242,13 +233,14 @@ function collectElements() {
   currentTime: getElement<HTMLElement>("#currentTime"),
   durationTime: getElement<HTMLElement>("#durationTime"),
   timelineRuler: getElement<HTMLButtonElement>("#timelineRuler"),
-  timelineRulerPlayhead: getElement<HTMLElement>("#timelineRulerPlayhead"),
   timelineViewportLabel: getElement<HTMLElement>("#timelineViewportLabel"),
   timelineZoomLabel: getElement<HTMLElement>("#timelineZoomLabel"),
   timelineZoomOutButton: getElement<HTMLButtonElement>("#timelineZoomOutButton"),
   timelineZoomResetButton: getElement<HTMLButtonElement>("#timelineZoomResetButton"),
   timelineZoomInButton: getElement<HTMLButtonElement>("#timelineZoomInButton"),
+  timelineSurface: getElement<HTMLElement>(".timeline-surface"),
   timelineShell: getElement<HTMLElement>("#timelineShell"),
+  timelineInteractionArea: getElement<HTMLElement>("#timelineInteractionArea"),
   timelineInput: getElement<HTMLInputElement>("#timelineInput"),
   timelineFill: getElement<HTMLElement>("#timelineFill"),
   timelineRange: getElement<HTMLElement>("#timelineRange"),
@@ -309,6 +301,10 @@ async function initializeRenderer(): Promise<void> {
     applyPreferences(DEFAULT_APP_PREFERENCES);
   }
   configureRendererViewActions({
+    setVolume: changeVolume,
+    toggleMute: () => updatePlaybackPreferences({ previewMuted: !state.preferences.previewMuted }),
+    setVolumeOpen,
+    setZoomPivot: (timelineZoomPivot) => updatePlaybackPreferences({ timelineZoomPivot }),
     openOutput: (outputPath) => {
       void window.ytClipper
         .openOutput(outputPath)
@@ -352,19 +348,16 @@ async function initializeRenderer(): Promise<void> {
     loadVideoFromInput();
   }
   void loadDependencies();
-  loadYouTubeApi();
+  new ResizeObserver(() => renderTimeline()).observe(elements.timelineRuler);
   startTicker();
   initializeDownloadQueue();
   window.ytClipper.onPreferencesChanged(applyPreferences);
-  void window.ytClipper.getCookieStatus().then(status => { previewCookiesConfigured = status.sites?.youtube?.configured ?? status.configured; }).catch(() => {});
-  window.ytClipper.onCookiesChanged?.((status) => {
-    previewCookiesConfigured = status.sites?.youtube?.configured ?? status.configured;
+  window.ytClipper.onCookiesChanged?.(() => {
     previewSources.clear();
     const videoId = state.expectedVideoId;
     if (!videoId) return;
     const snapshot = captureEditorSnapshot(state.segments);
-    // Recreate only the cross-origin player, not the editor/preferences screen.
-    // A fresh iframe re-reads cookies; cueing the same ID can reuse old auth.
+    // Resolve a fresh stream with the updated cookie snapshot, preserving edits.
     state.player?.destroy();
     state.player = null;
     state.playerReady = false;
@@ -417,13 +410,16 @@ function bindEvents() {
   elements.forwardLargeButton.addEventListener("click", () =>
     seekRelative(state.preferences.seekLargeSeconds),
   );
-  elements.timelineInput.addEventListener("pointerdown", (event) => {
-    beginTimelineSurfaceDrag(event, elements.timelineInput);
+  elements.timelineInput.addEventListener("pointerdown", beginTimelineAreaDrag);
+  elements.timelineInteractionArea.addEventListener("pointerdown", beginTimelineAreaDrag);
+  elements.timelineInteractionArea.addEventListener("pointermove", event => {
+    if (state.timelineInteraction !== null) return;
+    elements.timelineInteractionArea.dataset.hoverHandle = timelineHandleAt(event.clientX) ?? "";
+  });
+  elements.timelineInteractionArea.addEventListener("pointerleave", () => {
+    delete elements.timelineInteractionArea.dataset.hoverHandle;
   });
   elements.timelineInput.addEventListener("input", scrubTimeline);
-  elements.timelineInput.addEventListener("change", finishTimelineScrub);
-  elements.timelineInput.addEventListener("pointerup", finishTimelineScrub);
-  elements.timelineInput.addEventListener("pointercancel", finishTimelineScrub);
   elements.currentTimeHandle.addEventListener("pointerdown", (event) => {
     beginTimelinePositionDrag(event);
   });
@@ -433,10 +429,7 @@ function bindEvents() {
   elements.timelineRuler.addEventListener("keydown", (event) => {
     handleTimeDragKey(event, "playback");
   });
-  elements.timelineRuler.addEventListener("wheel", handleTimelineWheel, {
-    passive: false
-  });
-  elements.timelineShell.addEventListener("wheel", handleTimelineWheel, {
+  elements.timelineSurface.addEventListener("wheel", handleTimelineWheel, {
     passive: false
   });
   elements.timelineZoomOutButton.addEventListener("click", () => {
@@ -518,8 +511,14 @@ async function selectOutputDirectory(): Promise<void> {
 }
 
 function applyPreferences(preferences: AppPreferences): void {
-  state.preferences = normalizeAppPreferences(preferences, state.preferences);
-  if (!state.editingQueueItemId) {
+  const previous = state.preferences;
+  state.preferences = normalizeAppPreferences({ ...preferences, ...pendingPlaybackPreferences }, previous);
+  syncPlaybackOptions();
+  if (!state.editingQueueItemId && (!preferencesApplied ||
+    previous.defaultOutputDir !== state.preferences.defaultOutputDir ||
+    previous.defaultDownloadQuality !== state.preferences.defaultDownloadQuality ||
+    previous.defaultSpeedLimit !== state.preferences.defaultSpeedLimit ||
+    previous.defaultEncodingPreset !== state.preferences.defaultEncodingPreset)) {
     elements.outputDirInput.value = state.preferences.defaultOutputDir;
     setRendererSelectValue(
       elements.downloadQualitySelect,
@@ -536,6 +535,54 @@ function applyPreferences(preferences: AppPreferences): void {
     renderEncodingPresetDetails();
   }
   renderPlaybackStepControls();
+  preferencesApplied = true;
+}
+
+type PlaybackPreferences = Pick<AppPreferences, "previewVolume" | "previewMuted" | "timelineZoomPivot">;
+let pendingPlaybackPreferences: Partial<PlaybackPreferences> = {};
+let playbackSaveTimer: number | undefined;
+let savingPlaybackPreferences = false;
+let preferencesApplied = false;
+let volumeOpen = false;
+
+function syncPlaybackOptions(): void {
+  state.player?.setVolume(state.preferences.previewVolume, state.preferences.previewMuted);
+  setPlaybackOptionsView({ volume: state.preferences.previewVolume, muted: state.preferences.previewMuted,
+    zoomPivot: state.preferences.timelineZoomPivot });
+}
+
+function setVolumeOpen(open: boolean): void {
+  if (!open && document.activeElement?.closest(".volume-popover")) document.getElementById("volumeButton")?.focus();
+  volumeOpen = open;
+  setPlaybackOptionsView({ volumeOpen });
+}
+
+function changeVolume(volume: number): void {
+  updatePlaybackPreferences({ previewVolume: Math.round(Math.max(0, Math.min(1, volume)) * 100) / 100, previewMuted: false });
+}
+
+function updatePlaybackPreferences(patch: Partial<PlaybackPreferences>): void {
+  Object.assign(pendingPlaybackPreferences, patch);
+  Object.assign(state.preferences, patch);
+  syncPlaybackOptions();
+  window.clearTimeout(playbackSaveTimer);
+  playbackSaveTimer = window.setTimeout(() => void savePlaybackPreferences(), 200);
+}
+
+async function savePlaybackPreferences(): Promise<void> {
+  if (savingPlaybackPreferences || !Object.keys(pendingPlaybackPreferences).length) return;
+  savingPlaybackPreferences = true;
+  const patch = { ...pendingPlaybackPreferences };
+  try {
+    await window.ytClipper.updatePreferences(patch);
+    for (const key of Object.keys(patch) as (keyof PlaybackPreferences)[]) {
+      if (pendingPlaybackPreferences[key] === patch[key]) delete pendingPlaybackPreferences[key];
+    }
+  } catch (error) {
+    handleRendererRequestError(error);
+    return;
+  } finally { savingPlaybackPreferences = false; }
+  if (Object.keys(pendingPlaybackPreferences).length) void savePlaybackPreferences();
 }
 
 function renderPlaybackStepControls(): void {
@@ -678,36 +725,6 @@ function getSelectedOutputPreset(): OutputPreset {
   );
 }
 
-function loadYouTubeApi(): void {
-  if (window.YT?.Player) {
-    return;
-  }
-
-  const script = document.createElement("script");
-  script.src = "https://www.youtube.com/iframe_api";
-  document.head.appendChild(script);
-}
-
-window.onYouTubeIframeAPIReady = () => {
-  // An already-started native preview must not be replaced by a late API load.
-  if (fallbackGeneration === previewGeneration) return;
-  if (state.pendingPlayerRequest) {
-    const request = state.pendingPlayerRequest;
-    state.pendingPlayerRequest = null;
-    createOrLoadPlayer(
-      request.videoId,
-      request.initialRange,
-      request.editorRestore
-    );
-    return;
-  }
-
-  const pendingLink = parseSourceLink(elements.urlInput.value);
-  if (pendingLink.videoId) {
-    createOrLoadPlayer(pendingLink.videoId, pendingLink.timeRange);
-  }
-};
-
 function loadVideoFromInput(): void {
   if (elements.loadButton.disabled) return;
   const link = parseSourceLink(elements.urlInput.value);
@@ -726,9 +743,7 @@ function loadVideoFromInput(): void {
 }
 
 let previewGeneration = 0;
-let fallbackGeneration = -1;
-let previewCookiesConfigured = false;
-const nativePreviewVideos = new Set<string>();
+let loadedPreviewGeneration = -1;
 const previewSources = new Map<string, { result: Extract<PreviewResult, { ok: true }>; expires: number }>();
 
 function ensurePlayerPlaceholder(): void {
@@ -738,17 +753,16 @@ function ensurePlayerPlaceholder(): void {
   elements.playerStage.querySelector(".player-viewport")?.prepend(placeholder);
 }
 
-async function loadAuthenticatedPreview(videoId: string, generation: number): Promise<void> {
-  if (generation !== previewGeneration || fallbackGeneration === generation) return;
-  fallbackGeneration = generation;
-  nativePreviewVideos.add(videoId);
+async function loadNativePreview(videoId: string, generation: number): Promise<void> {
+  if (generation !== previewGeneration || loadedPreviewGeneration === generation) return;
+  loadedPreviewGeneration = generation;
+  void window.ytClipper.updateBrowserTabTitle("", videoId);
   state.playerReady = false;
   state.playbackAllowed = false;
-  // The hidden iframe must not keep playing audio while extraction is pending.
+  // Stop the previous source while the replacement is being resolved.
   state.player?.pauseVideo();
   state.player?.destroy();
   state.player = null;
-  state.pendingPlayerRequest = null;
   ensurePlayerPlaceholder();
   setPreviewMessage("preview.checking");
   try {
@@ -771,6 +785,7 @@ async function loadAuthenticatedPreview(videoId: string, generation: number): Pr
       setPreviewMessage(null);
       updateDuration();
       updateVideoMeta();
+      seekToTimelineTime(state.startTime ?? 0, true);
       updatePlaybackButton();
       renderTimeline();
       setProgressLabel(t("status.previewReady"));
@@ -781,6 +796,7 @@ async function loadAuthenticatedPreview(videoId: string, generation: number): Pr
       setPreviewMessage("preview.streamFailed");
       setProgressLabel(t("preview.streamFailed"));
     });
+    syncPlaybackOptions();
     setPreviewMessage("preview.loading");
   } catch {
     if (generation === previewGeneration) setPreviewMessage("preview.failed");
@@ -806,72 +822,11 @@ function createOrLoadPlayer(
   }
   ensurePlayerPlaceholder();
   state.playerReady = false;
-  if (videoId.startsWith("web:") || videoId.startsWith("chzzk:") || nativePreviewVideos.has(videoId)) {
-    void loadAuthenticatedPreview(videoId, generation);
-    return;
-  }
-  // With imported credentials, start the authenticated path promptly when the
-  // embed gives no metadata. Ordinary ready embeds stay on their existing path.
-  window.setTimeout(() => {
-    if (generation === previewGeneration && previewCookiesConfigured && state.duration === 0) {
-      void loadAuthenticatedPreview(videoId, generation);
-    }
-  }, 2000);
-  // Some private embeds report ready but never expose metadata or an error.
-  window.setTimeout(() => {
-    if (generation === previewGeneration && state.duration === 0) void loadAuthenticatedPreview(videoId, generation);
-  }, 15_000);
-
-  if (!window.YT?.Player) {
-    state.pendingPlayerRequest = { videoId, initialRange, editorRestore };
-    setProgressLabel(t("status.loadingPlayer"));
-    return;
-  }
-
-  state.player = new window.YT.Player("player", {
-    videoId,
-    width: "100%",
-    height: "100%",
-    playerVars: {
-      autoplay: 0,
-      cc_load_policy: 0,
-      controls: 0,
-      disablekb: 1,
-      fs: 0,
-      iv_load_policy: 3,
-      modestbranding: 1,
-      origin: window.location.origin,
-      playsinline: 1,
-      rel: 0,
-      showinfo: 0
-    },
-    events: {
-      onReady: () => {
-        if (generation !== previewGeneration || fallbackGeneration === generation) return;
-        state.playerReady = true;
-        state.playbackAllowed = false;
-        const readyPlayer = state.player;
-        if (
-          readyPlayer &&
-          readyPlayer.getPlayerState() === PLAYER_PLAYING
-        ) {
-          readyPlayer.pauseVideo();
-        }
-        updateDuration();
-        updateVideoMeta();
-        updatePlaybackButton();
-        renderTimeline();
-        setProgressLabel(t("status.previewReady"));
-      },
-      onStateChange: () => {
-        if (generation === previewGeneration && fallbackGeneration !== generation) handlePlayerStateChange();
-      },
-      onError: () => { void loadAuthenticatedPreview(videoId, generation); }
-    }
-  });
+  void loadNativePreview(videoId, generation);
 }
 
 function resetMarkers(): void {
+  lastTimelineHandle = null;
   state.startTime = null;
   state.endTime = null;
   state.rangeIsDefault = true;
@@ -889,7 +844,6 @@ function resetMarkers(): void {
   state.markerAttachedPlayhead = null;
   state.timelineInteraction = null;
   state.pendingSeekTime = null;
-  state.pendingSeekStartedAt = 0;
   state.timelineViewportStart = 0;
   state.timelineZoom = TIMELINE_MIN_ZOOM;
   timelineRulerSignature = "";
@@ -923,7 +877,7 @@ function startTicker(): void {
       if (state.pendingSeekTime === null) {
         state.currentTime = playerTime;
       }
-      if (state.timelineInteraction === null) {
+      if (state.timelineInteraction === null && state.preferences.timelineZoomPivot === "playhead" && state.player.getPlayerState() === PLAYER_PLAYING) {
         ensureTimelineTimeVisible(getDisplayedTimelineTime());
       }
       renderTimeline();
@@ -957,7 +911,6 @@ function handlePlaybackRangeBoundary(playerTime: number): boolean {
   player.pauseVideo();
   player.seekTo(range.end, true);
   state.pendingSeekTime = null;
-  state.pendingSeekStartedAt = 0;
   state.currentTime = range.end;
   renderTimeline();
   updatePlaybackButton();
@@ -1427,24 +1380,30 @@ function scrubTimeline(event: Event): void {
   requestTimelineSeek(next, true, false);
 }
 
-function finishTimelineScrub(): void {
-  if (state.timelineInteraction !== "scrub") {
-    return;
-  }
-
-  if (!state.playerReady) {
-    state.isScrubbing = false;
-    state.timelineInteraction = null;
-    return;
-  }
-
-  seekToTimelineTime(Number(elements.timelineInput.value), true);
-  state.isScrubbing = false;
-  state.timelineInteraction = null;
+function beginTimelinePositionDrag(event: PointerEvent): void {
+  lastTimelineHandle = "playhead";
+  beginTimelineSurfaceDrag(event, elements.timelineInput, true);
 }
 
-function beginTimelinePositionDrag(event: PointerEvent): void {
-  beginTimelineSurfaceDrag(event, elements.timelineInput);
+let lastTimelineHandle: TimelineHandle | null = null;
+
+function timelineHandleAt(clientX: number): TimelineHandle | null {
+  if (!state.playerReady || state.duration <= 0) return null;
+  const rect = elements.timelineInput.getBoundingClientRect();
+  const candidates: { kind: TimelineHandle; x: number }[] = [];
+  for (const [kind, time] of [["start", state.startTime], ["end", state.endTime], ["playhead", getDisplayedTimelineTime()]] as const) {
+    if (time !== null && isTimelineTimeVisible(time)) candidates.push({ kind, x: rect.left + rect.width * getTimelinePercent(time) / 100 });
+  }
+  return nearestTimelineHandle(clientX, candidates, lastTimelineHandle);
+}
+
+function beginTimelineAreaDrag(event: PointerEvent): void {
+  const handle = timelineHandleAt(event.clientX);
+  if (handle === "start" || handle === "end") beginMarkerDrag(event, handle, true);
+  else {
+    lastTimelineHandle = "playhead";
+    beginTimelineSurfaceDrag(event, elements.timelineInput, handle === "playhead");
+  }
 }
 
 function beginTimelineRulerDrag(event: PointerEvent): void {
@@ -1453,7 +1412,8 @@ function beginTimelineRulerDrag(event: PointerEvent): void {
 
 function beginTimelineSurfaceDrag(
   event: PointerEvent,
-  surface: HTMLElement
+  surface: HTMLElement,
+  relative = false,
 ): void {
   if (
     event.button !== 0 ||
@@ -1472,10 +1432,15 @@ function beginTimelineSurfaceDrag(
   target.classList.add("dragging");
   capturePointer(target, event.pointerId);
 
+  const rect = surface.getBoundingClientRect();
+  const offset = relative ? event.clientX - (rect.left + rect.width * getTimelinePercent(getDisplayedTimelineTime()) / 100) : 0;
+
   const move = (moveEvent: PointerEvent) => {
-    seekTimelineFromSurfaceClientX(moveEvent.clientX, surface, false);
+    if (moveEvent.pointerId !== event.pointerId) return;
+    seekTimelineFromSurfaceClientX(moveEvent.clientX - offset, surface, false);
   };
   const stop = (stopEvent: PointerEvent) => {
+    if (stopEvent.pointerId !== event.pointerId) return;
     releasePointerCapture(target, stopEvent.pointerId);
     target.classList.remove("dragging");
     window.removeEventListener("pointermove", move);
@@ -1489,7 +1454,7 @@ function beginTimelineSurfaceDrag(
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", stop);
   window.addEventListener("pointercancel", stop);
-  seekTimelineFromSurfaceClientX(event.clientX, surface, true);
+  seekTimelineFromSurfaceClientX(event.clientX - offset, surface, true);
 }
 
 function beginTimeReadoutDrag(event: PointerEvent, kind: TimeDragKind): void {
@@ -1507,7 +1472,7 @@ function beginTimeReadoutDrag(event: PointerEvent, kind: TimeDragKind): void {
   const target = event.currentTarget as HTMLElement;
   const initialClientX = event.clientX;
   const initialTime = getTimeDragValue(kind);
-  const dragWidth = Math.max(1, elements.timelineShell.clientWidth);
+  const dragWidth = Math.max(1, elements.timelineInput.getBoundingClientRect().width);
   const timelineSpan = getTimelineViewport().span;
   state.timelineInteraction = "readout";
   state.markerAttachedPlayhead = null;
@@ -1618,15 +1583,7 @@ function handleTimelineWheel(event: WheelEvent): void {
 
   event.preventDefault();
   event.stopPropagation();
-  const surface = event.currentTarget as HTMLElement;
-  const rect = surface.getBoundingClientRect();
-  const anchorRatio = clampRatio(
-    rect.width <= 0 ? 0.5 : (event.clientX - rect.left) / rect.width
-  );
-  zoomTimelineAtRatio(
-    event.deltaY < 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP,
-    anchorRatio
-  );
+  zoomTimelineFromControl(event.deltaY < 0 ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP);
 }
 
 function zoomTimelineFromControl(factor: number): void {
@@ -1634,16 +1591,7 @@ function zoomTimelineFromControl(factor: number): void {
     return;
   }
 
-  const viewport = getTimelineViewport();
-  const current = getDisplayedTimelineTime();
-  const anchorRatio =
-    current >= viewport.start && current <= viewport.end
-      ? clampRatio((current - viewport.start) / viewport.span)
-      : 0.5;
-  zoomTimelineAtRatio(factor, anchorRatio);
-}
-
-function zoomTimelineAtRatio(factor: number, anchorRatio: number): void {
+  if (state.timelineInteraction !== null) return;
   const previous = getTimelineViewport();
   const nextZoom = Math.max(
     TIMELINE_MIN_ZOOM,
@@ -1653,14 +1601,12 @@ function zoomTimelineAtRatio(factor: number, anchorRatio: number): void {
     return;
   }
 
-  const ratio = clampRatio(anchorRatio);
-  const anchorTime = previous.start + previous.span * ratio;
+  const pivot = state.preferences.timelineZoomPivot;
+  const anchorTime = pivot === "start" ? state.startTime ?? getDisplayedTimelineTime()
+    : pivot === "end" ? state.endTime ?? getDisplayedTimelineTime() : getDisplayedTimelineTime();
   const nextSpan = state.duration / nextZoom;
   state.timelineZoom = nextZoom;
-  state.timelineViewportStart = clampTimelineViewportStart(
-    anchorTime - nextSpan * ratio,
-    nextSpan
-  );
+  state.timelineViewportStart = zoomViewportStart(previous.start, previous.span, nextSpan, anchorTime, state.duration);
   timelineRulerSignature = "";
   renderTimeline();
 }
@@ -1710,7 +1656,7 @@ function capturePointer(target: HTMLElement, pointerId: number): void {
   }
 }
 
-function beginMarkerDrag(event: PointerEvent, marker: MarkerKind, relative = false): void {
+function beginMarkerDrag(event: PointerEvent, marker: MarkerKind, relative = true): void {
   if (
     event.button !== 0 ||
     !state.playerReady ||
@@ -1723,6 +1669,7 @@ function beginMarkerDrag(event: PointerEvent, marker: MarkerKind, relative = fal
   event.preventDefault();
   event.stopPropagation();
   state.timelineInteraction = "marker";
+  lastTimelineHandle = marker;
   state.draggingMarker = marker;
   state.markerAttachedPlayhead = null;
   const target = event.currentTarget as HTMLButtonElement;
@@ -1731,7 +1678,7 @@ function beginMarkerDrag(event: PointerEvent, marker: MarkerKind, relative = fal
 
   const initialTime = getTimeDragValue(marker);
   const initialX = event.clientX;
-  const secondsPerPixel = getTimelineViewport().span / Math.max(1, elements.timelineInput.clientWidth);
+  const secondsPerPixel = getTimelineViewport().span / Math.max(1, elements.timelineInput.getBoundingClientRect().width);
 
   const move = (moveEvent: PointerEvent) => {
     if (moveEvent.pointerId !== event.pointerId) return;
@@ -1823,6 +1770,9 @@ function handleShortcuts(event: KeyboardEvent): void {
   }
 
   if (event.isComposing) return;
+  if (event.target instanceof HTMLElement && event.target.closest(".volume-control, .volume-popover") &&
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+    ["ArrowUp", "ArrowDown", "Escape", "Home", "End"].includes(event.key)) return;
   const platform = new URLSearchParams(window.location.search).get("platform");
   const isMac = platform ? platform === "darwin" : /Mac/i.test(navigator.platform);
   const binding = shortcutFromEvent(event, isMac);
@@ -1838,7 +1788,21 @@ function handleShortcuts(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopImmediatePropagation();
   consumedShortcutKeys.add(event.code || event.key);
-  if (event.repeat && !/^(small|large|fine|frame)/.test(action)) return;
+  if (event.repeat && !/^(small|large|fine|frame|volumeUp|volumeDown|zoomIn|zoomOut)/.test(action)) return;
+  if (action === "volumeUp" || action === "volumeDown") {
+    changeVolume(state.preferences.previewVolume + (action === "volumeUp" ? 0.05 : -0.05));
+    return;
+  }
+  if (action === "mute") { updatePlaybackPreferences({ previewMuted: !state.preferences.previewMuted }); return; }
+  if (action === "volumePopup") { setVolumeOpen(!volumeOpen); return; }
+  if (action === "pivotPlayhead" || action === "pivotStart" || action === "pivotEnd") {
+    const timelineZoomPivot: ZoomPivot = action === "pivotStart" ? "start" : action === "pivotEnd" ? "end" : "playhead";
+    updatePlaybackPreferences({ timelineZoomPivot }); return;
+  }
+  if (action === "zoomIn" || action === "zoomOut") {
+    zoomTimelineFromControl(action === "zoomIn" ? TIMELINE_ZOOM_STEP : 1 / TIMELINE_ZOOM_STEP); return;
+  }
+  if (action === "zoomReset") { resetTimelineZoom(); return; }
   if (action === "focusUrl") {
     event.preventDefault();
     elements.urlInput.focus();
@@ -2271,11 +2235,8 @@ function updateDuration(metadataDuration?: number): void {
     applyLinkTimeRange(state.pendingLinkRange);
   } else if (state.rangeIsDefault) {
     applyFullVideoRange();
-    if (state.playerReady) {
-      seekToTimelineTime(0, true);
-    }
   } else {
-    // YouTube can refine the duration after the initial player-ready event.
+    // Media metadata can refine the duration after the initial ready event.
     // Keep an end marker at the video boundary attached to that boundary.
     if (endWasAtVideoEnd) state.endTime = duration;
     syncRangeDisplay();
@@ -2344,7 +2305,6 @@ function syncTimeHandleAccessibility(
 
 function renderCurrentAnchor(time: number): void {
   const visible = state.duration > 0 && isTimelineTimeVisible(time);
-  elements.timelineRulerPlayhead.classList.toggle("hidden", !visible);
   if (!visible) {
     elements.currentTimeAnchor.classList.add("hidden");
     return;
@@ -2354,10 +2314,6 @@ function renderCurrentAnchor(time: number): void {
   elements.currentTimeAnchor.classList.remove("hidden");
   elements.currentTimeAnchor.classList.toggle("seeking", state.pendingSeekTime !== null);
   elements.currentTimeAnchor.style.setProperty(
-    "--timeline-current-position",
-    `${percent}%`
-  );
-  elements.timelineRuler.style.setProperty(
     "--timeline-current-position",
     `${percent}%`
   );
@@ -2597,51 +2553,10 @@ function renderTimelineRuler(viewport: {
   }
 
   const width = Math.max(1, elements.timelineRuler.clientWidth);
-  const majorInterval = getTimelineMajorInterval(viewport.span, width);
-  const minorInterval = majorInterval / 5;
-  const signature = [
-    viewport.start.toFixed(4),
-    viewport.end.toFixed(4),
-    Math.round(width),
-    majorInterval
-  ].join(":");
-  if (signature === timelineRulerSignature) {
-    return;
-  }
-
+  const signature = [viewport.start, viewport.end, width].join(":");
+  if (signature === timelineRulerSignature) return;
   timelineRulerSignature = signature;
-  const firstTick = Math.ceil((viewport.start - 0.000001) / minorInterval) * minorInterval;
-  const items: Array<{
-    id: string;
-    label: string | null;
-    left: string;
-    major: boolean;
-  }> = [];
-  for (
-    let index = 0, time = firstTick;
-    time <= viewport.end + minorInterval * 0.01 && index < 240;
-    index += 1, time += minorInterval
-  ) {
-    const major =
-      Math.abs(time / majorInterval - Math.round(time / majorInterval)) <
-      0.0001;
-    items.push({
-      id: `${index}-${time.toFixed(6)}`,
-      label: major ? formatTimelineRulerTime(time, majorInterval) : null,
-      left: `${getTimelinePercent(time)}%`,
-      major
-    });
-  }
-  setTimelineRulerViewItems(items);
-}
-
-function getTimelineMajorInterval(span: number, width: number): number {
-  const target = span / Math.max(1, width / TIMELINE_MAJOR_TICK_PIXELS);
-  const intervals = [
-    0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
-    60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400
-  ];
-  return intervals.find((interval) => interval >= target) ?? intervals[intervals.length - 1];
+  setTimelineRulerViewItems(buildTimelineTicks(viewport, width, formatTimelineRulerTime));
 }
 
 function formatTimelineRulerTime(time: number, interval: number): string {
@@ -2732,9 +2647,8 @@ function constrainPlayhead(time: number): number {
 function beginPendingSeek(time: number): void {
   const next = clampTime(time);
   state.pendingSeekTime = next;
-  state.pendingSeekStartedAt = performance.now();
   state.currentTime = next;
-  ensureTimelineTimeVisible(next);
+  if (!state.isScrubbing) ensureTimelineTimeVisible(next);
   renderTimeline();
 }
 
@@ -2744,15 +2658,12 @@ function reconcilePendingSeek(playerTime: number): void {
   }
 
   // The drag is authoritative until its final forced seek on release.
-  if (state.markerAttachedPlayhead !== null) return;
+  if (state.timelineInteraction !== null || state.player?.isSeeking()) return;
 
   const settled =
     Math.abs(playerTime - state.pendingSeekTime) <= SEEK_SETTLE_EPSILON;
-  const timedOut =
-    performance.now() - state.pendingSeekStartedAt >= SEEK_SETTLE_TIMEOUT_MS;
-  if (settled || timedOut) {
+  if (settled) {
     state.pendingSeekTime = null;
-    state.pendingSeekStartedAt = 0;
     state.currentTime = playerTime;
   }
 }

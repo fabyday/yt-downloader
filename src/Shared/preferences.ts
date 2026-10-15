@@ -24,6 +24,9 @@ export const ENCODING_PRESETS = [
 ] as const;
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
+  previewVolume: 1,
+  previewMuted: false,
+  timelineZoomPivot: "playhead",
   shortcuts: { ...DEFAULT_SHORTCUTS },
   hardwareAcceleration: true,
   automaticUpdates: true,
@@ -42,6 +45,10 @@ export function normalizeAppPreferences(
   defaults: AppPreferences = DEFAULT_APP_PREFERENCES,
 ): AppPreferences {
   return {
+    previewVolume: normalizeNumber(value?.previewVolume, defaults.previewVolume, 0, 1),
+    previewMuted: normalizeBoolean(value?.previewMuted, defaults.previewMuted),
+    timelineZoomPivot: value?.timelineZoomPivot === "start" || value?.timelineZoomPivot === "end" || value?.timelineZoomPivot === "playhead"
+      ? value.timelineZoomPivot : defaults.timelineZoomPivot,
     shortcuts: normalizeShortcuts(value?.shortcuts ?? defaults.shortcuts),
     hardwareAcceleration: normalizeBoolean(
       value?.hardwareAcceleration,

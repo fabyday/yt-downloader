@@ -490,16 +490,11 @@ body[data-view="queue"] {
   line-height: 1.7;
 }
 
-#player,
-.player-stage iframe {
+#player {
   width: 100%;
   height: 100%;
 }
 
-.player-stage iframe {
-  display: block;
-  pointer-events: none;
-}
 
 .player-placeholder {
   display: grid;
@@ -510,11 +505,15 @@ body[data-view="queue"] {
 
 .timeline-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 6px;
 }
 
 .timeline-meta {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   align-items: center;
   justify-content: space-between;
   color: #a7b0be;
@@ -539,6 +538,7 @@ body[data-view="queue"] {
 
 .timeline-ruler-tools {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .timeline-zoom-button,
@@ -573,11 +573,13 @@ body[data-view="queue"] {
   position: relative;
   display: block;
   width: 100%;
-  height: 36px;
+  min-width: 0;
+  padding: 0;
+  height: var(--timeline-ruler-height);
   overflow: hidden;
   border: 0;
-  box-shadow: inset 0 0 0 1px var(--kawai-color-border);
-  border-radius: 5px;
+  box-shadow: none;
+  border-radius: 0;
   background: color-mix(
     in oklab,
     var(--kawai-color-secondary) 76%,
@@ -646,24 +648,14 @@ body[data-view="queue"] {
   white-space: nowrap;
 }
 
-.timeline-ruler-playhead {
-  top: 0;
-  bottom: 0;
-  left: clamp(
-    1.5px,
-    var(--timeline-current-position, 0%),
-    calc(100% - 1.5px)
-  );
-  z-index: 3;
-  width: 3px;
-  background: #ff4d5e;
-  box-shadow: 0 0 0 1px #101218;
+.timeline-ruler-tick.label-center .timeline-ruler-tick-label {
+  left: 0;
   transform: translateX(-50%);
-  pointer-events: none;
 }
 
-.timeline-ruler-playhead::after {
-  content: none;
+.timeline-ruler-tick.label-end .timeline-ruler-tick-label {
+  left: -4px;
+  transform: translateX(-100%);
 }
 
 .timeline-shell {
@@ -671,9 +663,19 @@ body[data-view="queue"] {
   height: 38px;
 }
 
-/* Show the exact Alt+wheel hit areas without changing their geometry or focus. */
-.timeline-ruler::before,
-.timeline-shell::before {
+/* One shared surface keeps ruler, track and playhead in the same coordinate space. */
+.timeline-surface {
+  --timeline-ruler-height: 36px;
+  --timeline-track-gap: 26px;
+  --timeline-bottom-gap: 16px;
+  position: relative;
+  border: 1px solid var(--kawai-color-border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--kawai-color-secondary) 35%, var(--kawai-color-background));
+}
+/* Show the unified Alt+wheel area without changing geometry or focus. */
+.timeline-surface::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -686,8 +688,7 @@ body[data-view="queue"] {
   pointer-events: none;
 }
 
-.alt-zoom-active .timeline-ruler::before,
-.alt-zoom-active .timeline-shell::before {
+.alt-zoom-active .timeline-surface::before {
   opacity: 1;
 }
 
@@ -808,8 +809,8 @@ body[data-view="queue"] {
 
 .timeline-current-line {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 0;
+  bottom: 0;
   left: clamp(
     1.5px,
     var(--timeline-current-position, 0%),
@@ -823,11 +824,11 @@ body[data-view="queue"] {
 
 .timeline-current-hitarea {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: calc(var(--timeline-ruler-height) + var(--timeline-track-gap));
+  bottom: var(--timeline-bottom-gap);
   left: var(--timeline-current-position, 0%);
   width: 18px;
-  height: 100%;
+  height: auto;
   min-width: 18px;
   min-height: 18px;
   border: 0;
@@ -843,7 +844,7 @@ body[data-view="queue"] {
 
 .timeline-seeking-label {
   position: absolute;
-  top: -22px;
+  top: 40px;
   left: clamp(
     34px,
     var(--timeline-current-position, 0%),
@@ -2135,7 +2136,7 @@ body {
 }
 
 .transport {
-  grid-template-columns: 132px minmax(0, 1fr) max-content;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   min-height: 52px;
   gap: 8px;
 }
@@ -2381,7 +2382,7 @@ body {
   }
 
   .transport {
-    grid-template-columns: 116px minmax(0, 1fr) max-content;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
   }
 
   .button-row .icon-button {
@@ -2459,7 +2460,52 @@ body {
 .segment-panel { position: relative; }
 .segment-notice { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; pointer-events: none; z-index: 10; }
 .segment-notice > span { max-width: 100%; padding: 12px 16px; border: 1px solid #eeac52; border-radius: 8px; background: #2a2119; color: #ffe0ab; box-shadow: 0 4px 20px #0008; text-align: center; font-size: 13px; }
-.timeline-shell { margin-top: 26px; }
+.timeline-shell { margin-top: 0; }
+.timeline-panel { row-gap: 0; }
+.timeline-meta { padding-bottom: 4px; }
+#timelineInput { border: 0; box-sizing: border-box; }
+.timeline-interaction-area {
+  min-width: 0;
+  padding-block: var(--timeline-track-gap) var(--timeline-bottom-gap);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.timeline-interaction-area[data-hover-handle="start"],
+.timeline-interaction-area[data-hover-handle="end"],
+.timeline-interaction-area[data-hover-handle="playhead"] { cursor: ew-resize; }
+.timeline-interaction-area[data-hover-handle="start"] #startMarkerHandle,
+.timeline-interaction-area[data-hover-handle="end"] #endMarkerHandle { filter: brightness(1.4); }
+.timeline-surface:has(.timeline-interaction-area[data-hover-handle="playhead"]) .timeline-current-line { box-shadow: 0 0 5px #ff4d5e; }
+.volume-control { position: relative; display: flex; flex: 0 0 auto; }
+.timeline-volume-button {
+  display: grid; place-items: center; width: 28px; height: 28px; padding: 0;
+  color: var(--kawai-color-foreground); background: var(--kawai-color-secondary);
+  border: 1px solid var(--kawai-color-border); border-radius: 4px; cursor: pointer;
+}
+.timeline-volume-button:focus-visible { outline: 2px solid var(--kawai-color-primary); outline-offset: 2px; }
+.volume-popover {
+  position: fixed;
+  z-index: 1000; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  box-sizing: border-box; width: 34px; min-width: 0; padding: 8px 2px; border: 1px solid var(--kawai-color-border); border-radius: 6px;
+  background: var(--kawai-color-background); box-shadow: 0 6px 24px #0008;
+}
+#volumeValue { font-size: 9px; line-height: 12px; font-variant-numeric: tabular-nums; color: #fff; }
+.volume-slider { position: relative; width: 24px; height: 130px; flex: 0 0 auto; }
+.volume-slider-track { position: absolute; top: 7px; bottom: 7px; left: 10px; width: 4px; border-radius: 2px; background: #555963; overflow: hidden; }
+.volume-slider-fill { position: absolute; bottom: 0; width: 100%; height: calc(var(--volume-level) * 100%); background: var(--downloader-accent); }
+.volume-slider-thumb { position: absolute; left: 5px; bottom: calc(var(--volume-level) * (100% - 14px)); width: 14px; height: 14px; border-radius: 50%; background: var(--downloader-accent); pointer-events: none; }
+#volumeSlider {
+  position: absolute; inset: 0; box-sizing: border-box; appearance: none; -webkit-appearance: none;
+  writing-mode: vertical-lr; direction: rtl; width: 24px; min-width: 0; height: 130px;
+  margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer;
+}
+#volumeSlider::-webkit-slider-runnable-track { width: 24px; height: 100%; background: transparent; border: 0; }
+#volumeSlider::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; background: transparent; border: 0; }
+.volume-mute-button { display: grid; place-items: center; width: 26px; height: 26px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 4px; color: #fff; background: transparent; cursor: pointer; }
+.volume-mute-button:hover { background: #ffffff12; }
+.volume-mute-button[aria-pressed="true"], .timeline-volume-button[data-muted="true"] { color: #ff4d5e; }
+.volume-mute-button:focus-visible, #volumeSlider:focus-visible { outline: 1px solid var(--downloader-accent); outline-offset: 1px; }
 .marker-split-tags { position: absolute; top: -26px; left: 0; right: 0; height: 24px; z-index: 8; pointer-events: none; }
 .marker-split-tags.hidden { display: none; }
 .marker-split-tags button { position: absolute; display: flex; align-items: center; justify-content: center; min-width: 76px; height: 24px; border: 0; border-radius: 0; background: currentColor; clip-path: var(--marker-tag-shape); font-size: 11px; white-space: nowrap; cursor: ew-resize; touch-action: none; pointer-events: auto; }
@@ -2490,6 +2536,64 @@ body {
   pointer-events: none;
   visibility: hidden;
   transition: visibility 0s linear 360ms;
+}
+
+/* Long timecodes must keep their width without squeezing adjacent controls. */
+.editor-dock .markers {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+}
+
+.editor-dock .markers-header {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+
+.markers-header .range-value {
+  overflow-wrap: normal;
+}
+
+.marker-row {
+  flex-wrap: wrap;
+}
+
+.marker-row > div {
+  flex: 1 0 max-content;
+}
+
+.timeline-ruler-tools #timelineViewportLabel {
+  max-width: none;
+  overflow: visible;
+}
+
+@media (max-width: 720px) {
+  .source-toolbar {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .source-toolbar > :first-child {
+    grid-column: 1 / -1;
+  }
+  .source-toolbar > button {
+    white-space: normal;
+    padding-inline: 4px;
+    font-size: 12px;
+  }
+  .transport {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  .transport .button-row {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .transport .loop-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .transport .button-row > button {
+    width: auto;
+    flex: 1;
+  }
 }
 
 .tab-workspace-view.active {
@@ -3087,6 +3191,20 @@ body[data-view="queue"] {
   width: min(100%, 760px);
   margin-inline: auto;
 }
+.app-social-links { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.app-social-links > button { min-width: 0; padding-inline: 10px; border: 1px solid var(--kawai-color-border); }
+.app-info-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.app-info-identity { min-width: 0; flex: 1 1 280px; }
+.app-info-icon { width: 46px; height: 46px; flex-shrink: 0; color: #a9bbff; }
+.app-info-detail-row { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 16px; padding-block: 10px; border-top: 1px solid var(--kawai-color-border); }
+.app-info-detail-row > :last-child { min-width: 0; overflow-wrap: anywhere; }
+.app-info-release-row > :last-child { justify-content: space-between; }
+.app-info-binary-version { white-space: normal; user-select: text; }
+.app-info-update-status:empty { display: none; }
+@media (max-width: 650px) {
+  .app-social-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app-info-detail-row { grid-template-columns: 80px minmax(0, 1fr); gap: 10px; }
+}
 .preference-shortcuts { width: min(100%, 680px); margin-inline: auto; }
 .shortcut-entry { border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; }
 .shortcut-entry.shortcut-conflict { border-color: #ff5d6c; background: rgb(255 93 108 / 6%); }
@@ -3151,4 +3269,32 @@ body[data-view="queue"] {
 
 @media (max-width: 760px) {
   .editor-dock { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Keep range summary and endpoints compact, with room for the policy buttons. */
+.editor-dock { grid-template-columns: minmax(0, 1fr) minmax(360px, 430px); }
+.editor-dock > .markers {
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto;
+  align-content: start; gap: 6px; padding: 10px; box-sizing: border-box;
+  border: 1px solid var(--kawai-color-border); border-radius: 12px; background: #11141d;
+}
+.editor-dock .markers-header {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 6px 10px; padding: 0 0 6px; border: 0; border-bottom: 1px solid var(--kawai-color-border);
+  border-radius: 0; background: transparent;
+}
+.editor-dock .markers-header > div { min-width: 0; }
+.editor-dock .markers-header > div:last-child { gap: 4px; flex-wrap: nowrap; }
+.editor-dock .marker-row {
+  display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 0; border: 0; border-radius: 0; background: transparent;
+}
+.editor-dock .marker-row > div { display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.editor-dock .marker-value, .editor-dock .range-value { font-size: 14px; white-space: nowrap; }
+.editor-dock .marker-row button, .editor-dock .markers-header button { white-space: nowrap; flex-shrink: 0; max-width: none; }
+.selection-rules-panel .selection-mode-controls { flex-wrap: nowrap; }
+.selection-rules-panel .selection-mode-controls button { white-space: nowrap; }
+@media (max-width: 850px) {
+  .editor-dock { grid-template-columns: minmax(0, 1fr); }
+  .selection-rules-panel .selection-mode-controls { flex-wrap: wrap; }
 }

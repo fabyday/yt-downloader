@@ -159,10 +159,49 @@ const mockBridge = `(() => {
     }
   }
 
+  // Simulate media timing only; the production NativePreview and DOM/layout still run.
+  // Real-media diagnostics opt out and use the supplied local video fixture.
   window.YT = { Player: MockPlayer, PlayerState: { PLAYING: 1 } };
+  if (!${Boolean(process.env.UI_HARNESS_MEDIA_FIXTURE || process.env.UI_HARNESS_REAL_MEDIA)}) {
+    const proto = HTMLMediaElement.prototype;
+    const playerFor = element => element.__player;
+    Object.defineProperty(proto, 'src', { configurable: true, get() { return this.__src || ''; }, set(value) {
+      this.__src = value;
+      const element = this;
+      clearInterval(this.__frameTimer);
+      this.__frameTimer=setInterval(()=>{if(!element.paused && !element.seeking) element.__frame?.(performance.now(),{mediaTime:element.currentTime});},16);
+      this.__player = new MockPlayer('', { videoId: window.__previewVideoId,
+        events: { onReady() { element.dispatchEvent(new Event('loadeddata')); element.__frame?.(); },
+          onStateChange() { element.dispatchEvent(new Event(element.__player.state === 1 ? 'play' : 'pause')); } } });
+    } });
+    for (const [key, get] of Object.entries({
+      duration() { return playerFor(this)?.getDuration() || 0; },
+      paused() { return playerFor(this)?.state !== 1; },
+      ended() { return false; }, readyState() { return 2; }, seeking() { return !!this.__seeking; },
+    })) Object.defineProperty(proto, key, { configurable: true, get });
+    Object.defineProperty(proto, 'currentTime', { configurable: true,
+      get() { return playerFor(this)?.getCurrentTime() || 0; },
+      set(value) {
+        clearTimeout(this.__seekTimer); this.__seeking = true; this.dispatchEvent(new Event('seeking'));
+        const finish = () => { playerFor(this)?.seekTo(value); this.__seeking = false; this.__frame?.(performance.now(),{mediaTime:this.currentTime}); this.dispatchEvent(new Event('seeked')); };
+        if (window.mockSeekDelayMs) this.__seekTimer = setTimeout(finish, window.mockSeekDelayMs); else finish();
+      }
+    });
+    proto.play = function() { playerFor(this)?.playVideo(); this.dispatchEvent(new Event('playing')); return Promise.resolve(); };
+    proto.pause = function() { playerFor(this)?.pauseVideo(); };
+    proto.load = function() { clearTimeout(this.__seekTimer); clearInterval(this.__frameTimer); };
+    for (const [key, value] of Object.entries({ videoWidth: 640, videoHeight: 360 })) {
+      Object.defineProperty(HTMLVideoElement.prototype, key, { configurable: true, get: () => value });
+    }
+    HTMLVideoElement.prototype.requestVideoFrameCallback = function(callback) { this.__frame = callback; return 1; };
+  }
   window.ytClipper = {
     getBrowserProfiles: async ({browser}) => ({supported:!['safari','opera'].includes(browser),profiles:browser==='chrome'?[{value:'Default',label:'Personal (Default)'},{value:'Profile 1',label:'Work (Profile 1)'}]:[]}),
-    resolvePreview: async () => window.mockPreviewResult || ({ok:false,error:'preview.expired'}),
+    resolvePreview: async videoId => {
+      window.__previewVideoId = videoId;
+      return window.mockPreviewResult || {ok:true,videoId,title:${JSON.stringify(mockVideoTitle)},duration:${JSON.stringify(mockDuration)},
+        url: ${Boolean(process.env.UI_HARNESS_MEDIA_FIXTURE)} ? location.origin + '/preview-fixture.mp4' : 'https://media.googlevideo.com/fixture'};
+    },
     getCookieStatus: async () => ({ ...cookieStatus }),
     openCookiePermissionSettings: async () => {},
     requestCookieAccess: async () => {},
@@ -323,7 +362,7 @@ const server = http.createServer((request, response) => {
       "Content-Type": "application/javascript; charset=utf-8",
       "Cache-Control": "no-store"
     });
-    response.end(mockBridge);
+    response.end(mockBridge + (server.previewResult ? `window.mockPreviewResult = ${JSON.stringify(server.previewResult)};` : ""));
     return;
   }
 

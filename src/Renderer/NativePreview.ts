@@ -2,7 +2,7 @@ import type { PreviewResult } from "../Shared/types";
 import { isPreviewMediaUrl } from "../Shared/VideoSource";
 import type Hls from "hls.js";
 
-export class NativePreview implements YouTubePlayer {
+export class NativePreview implements PreviewPlayer {
   private readonly video = document.createElement("video");
   private readonly audio: HTMLAudioElement | null;
   private readonly timeout: number;
@@ -11,6 +11,10 @@ export class NativePreview implements YouTubePlayer {
   private ready = false;
   private framePresented = false;
   private wantsPlayback = false;
+  private presentedTime: number | null = null;
+  private queuedSeek: number | null = null;
+  private volume = 1;
+  private muted = false;
   private hls: Hls | null = null;
   constructor(private readonly source: Extract<PreviewResult, { ok: true }>,
     onReady: () => void, onChange: () => void, onError: () => void) {
@@ -33,25 +37,40 @@ export class NativePreview implements YouTubePlayer {
     const checkReady = () => {
       if (this.ready || this.disposed || this.failed || !this.framePresented || this.video.readyState < 2 || (this.audio && this.audio.readyState < 2)) return;
       this.ready = true;
-      this.video.muted = false;
+      this.applyVolume();
       clearTimeout(this.timeout);
       onReady();
     };
     this.video.addEventListener("loadeddata", checkReady);
-    this.video.requestVideoFrameCallback(() => {
+    const presentedFrame: VideoFrameRequestCallback = (_now, metadata) => {
       if (this.disposed || this.failed) return;
       this.framePresented = this.video.videoWidth > 0 && this.video.videoHeight > 0;
+      this.presentedTime = metadata?.mediaTime ?? this.video.currentTime;
       checkReady();
-    });
+      this.video.requestVideoFrameCallback(presentedFrame);
+    };
+    this.video.requestVideoFrameCallback(presentedFrame);
     this.video.addEventListener("error", fail);
     this.video.addEventListener("waiting", () => this.audio?.pause());
+    this.video.addEventListener("seeking", () => this.audio?.pause());
+    this.video.addEventListener("seeked", () => {
+      if (this.disposed || this.failed) return;
+      if (this.queuedSeek !== null) {
+        const next = this.queuedSeek;
+        this.queuedSeek = null;
+        if (Math.abs(next - this.video.currentTime) > 0.001) { this.video.currentTime = next; return; }
+      }
+      if (!this.audio) return;
+      this.audio.currentTime = this.video.currentTime;
+      if (this.ready && this.wantsPlayback && !this.video.paused) void this.audio.play().catch(fail);
+    });
     this.video.addEventListener("playing", () => {
       if (!this.audio || this.disposed || !this.ready || !this.wantsPlayback || this.video.paused) return;
       this.audio.currentTime = this.video.currentTime;
       void this.audio.play().catch(fail);
     });
     this.video.addEventListener("timeupdate", () => {
-      if (this.audio && !this.video.paused && Math.abs(this.audio.currentTime - this.video.currentTime) > 0.2) {
+      if (this.audio && !this.video.paused && !this.video.seeking && !this.audio.seeking && Math.abs(this.audio.currentTime - this.video.currentTime) > 0.2) {
         this.audio.currentTime = this.video.currentTime;
       }
     });
@@ -85,7 +104,23 @@ export class NativePreview implements YouTubePlayer {
       this.hls.attachMedia(this.video);
     } catch { fail(); }
   }
-  getCurrentTime(): number { return this.video.currentTime; }
+  getCurrentTime(): number {
+    // During playback, follow frames actually submitted to the compositor, not an audio/media clock
+    // that may continue while video decoding is stalled. Explicit seeks retain their target in app.ts.
+    return !this.video.paused && !this.video.seeking && this.presentedTime !== null
+      ? this.presentedTime : this.video.currentTime;
+  }
+  setVolume(volume: number, muted: boolean): void {
+    this.volume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1;
+    this.muted = muted;
+    this.applyVolume();
+  }
+  private applyVolume(): void {
+    this.video.volume = this.volume;
+    this.video.muted = !this.ready || this.muted;
+    if (this.audio) { this.audio.volume = this.volume; this.audio.muted = this.muted; }
+  }
+  isSeeking(): boolean { return this.video.seeking || this.queuedSeek !== null; }
   getDuration(): number { return Number.isFinite(this.video.duration) ? this.video.duration : 0; }
   getPlayerState(): number { return this.video.ended ? 0 : this.video.paused ? 2 : 1; }
   getVideoData() { return { title: this.source.title, video_id: this.source.videoId }; }
@@ -96,12 +131,13 @@ export class NativePreview implements YouTubePlayer {
     void this.video.play().catch(() => { this.wantsPlayback = false; this.audio?.pause(); });
   }
   seekTo(seconds: number): void {
-    this.video.currentTime = Math.max(0, Math.min(seconds, this.getDuration()));
-    if (this.audio) this.audio.currentTime = this.video.currentTime;
+    const next = Math.max(0, Math.min(seconds, this.getDuration()));
+    // Finish the current decoder seek before applying the latest drag target.
+    // Replacing currentTime repeatedly can prevent network-backed frames from ever settling.
+    if (this.video.seeking) { this.queuedSeek = next; return; }
+    this.queuedSeek = null;
+    this.video.currentTime = next;
   }
-  // The controller recreates this adapter on source changes.
-  cueVideoById(): void {}
-  loadVideoById(): void {}
   destroy(): void {
     if (this.disposed) return;
     this.disposed = true;

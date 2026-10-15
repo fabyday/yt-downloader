@@ -33,6 +33,7 @@ export interface TimelineSegmentViewItem {
 }
 
 export interface TimelineRulerViewItem {
+  align: "start" | "center" | "end";
   id: string;
   label: string | null;
   left: string;
@@ -56,6 +57,10 @@ export interface QueueViewItem {
 }
 
 interface RendererViewSnapshot {
+  volume: number;
+  muted: boolean;
+  volumeOpen: boolean;
+  zoomPivot: import("../Shared/timelineInteraction").ZoomPivot;
   segmentNotice: { message: string; revision: number } | null;
   selectionMode: import("../Shared/selectionMode").SelectionMode;
   previewMessage: string | null;
@@ -70,6 +75,10 @@ interface RendererViewSnapshot {
 }
 
 interface RendererViewActions {
+  setVolume: (volume: number) => void;
+  toggleMute: () => void;
+  setVolumeOpen: (open: boolean) => void;
+  setZoomPivot: (pivot: import("../Shared/timelineInteraction").ZoomPivot) => void;
   clearQueue: () => void;
   focusDownloadSegment: (segmentId: number | null) => void;
   openOutput: (outputPath: string) => void;
@@ -85,6 +94,7 @@ interface RendererViewActions {
 }
 
 let snapshot: RendererViewSnapshot = {
+  volume: 1, muted: false, volumeOpen: false, zoomPivot: "playhead",
   segmentNotice: null,
   selectionMode: "free",
   previewMessage: null,
@@ -99,6 +109,7 @@ let snapshot: RendererViewSnapshot = {
 };
 
 let actions: RendererViewActions = {
+  setVolume: () => {}, toggleMute: () => {}, setVolumeOpen: () => {}, setZoomPivot: () => {},
   clearQueue: () => {},
   focusDownloadSegment: () => {},
   openOutput: () => {},
@@ -131,6 +142,10 @@ export function setPreviewMessage(previewMessage: string | null): void {
 }
 
 export function setSelectionModeView(selectionMode: RendererViewSnapshot["selectionMode"]): void { updateSnapshot({ selectionMode }); }
+
+export function setPlaybackOptionsView(options: Partial<Pick<RendererViewSnapshot, "volume" | "muted" | "volumeOpen" | "zoomPivot">>): void {
+  updateSnapshot(options);
+}
 
 export function configureRendererViewActions(
   nextActions: Partial<RendererViewActions>,

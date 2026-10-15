@@ -36,6 +36,9 @@ export type DownloadQueueStatus =
   | "error";
 
 export interface AppPreferences {
+  previewVolume: number;
+  previewMuted: boolean;
+  timelineZoomPivot: import("./timelineInteraction").ZoomPivot;
   shortcuts: import("./shortcuts").ShortcutBindings;
   hardwareAcceleration: boolean;
   automaticUpdates: boolean;
@@ -50,6 +53,8 @@ export interface AppPreferences {
 }
 
 export interface AppInfo {
+  electronVersion?: string;
+  chromeVersion?: string;
   isPackaged?: boolean;
   runtimeAppPath?: string | null;
   arch: string;
@@ -195,7 +200,7 @@ export interface YtClipperApi {
   createBrowserTab(): Promise<BrowserTabSnapshot>;
   activateBrowserTab(tabId: string): Promise<BrowserTabSnapshot>;
   closeBrowserTab(tabId: string): Promise<BrowserTabSnapshot>;
-  updateBrowserTabTitle(title: string): Promise<BrowserTabSnapshot>;
+  updateBrowserTabTitle(title: string, sourceKey?: string): Promise<BrowserTabSnapshot>;
   openQueueWindow(): Promise<boolean>;
   getAppInfo(): Promise<AppInfo>;
   checkForUpdates(): Promise<AppUpdateInfo>;

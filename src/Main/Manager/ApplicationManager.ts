@@ -40,7 +40,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
   }
 
   openExternalUrl(value: string): void {
-    if (this.windowManager) {
+    if (this.windowManager && this.initialized) {
       this.windowManager.openExternalUrl(value);
       return;
     }

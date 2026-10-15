@@ -54,7 +54,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@kawaikara/kawai-ui": "github:Kawaikara/KawaiUi#1811ae76a834ad15a82bcd955fae86f346cdb09d",
+    "@kawaikara/kawai-ui": "file:vendor/kawai-ui-0.1.2.tgz",
     "hls.js": "^1.7.3",
     "motion": "^13.0.0",
     "react": "^19.2.8",

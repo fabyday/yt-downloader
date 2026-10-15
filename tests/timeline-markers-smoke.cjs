@@ -25,6 +25,7 @@ app.whenReady().then(async () => {
     })()`);
     console.log(JSON.stringify({source, ...result}));
     assert.equal(result.start, source.includes('t=120') ? '02:00.000' : '00:00.000');
+    assert.equal(await win.webContents.executeJavaScript('window.mockPlayer.getCurrentTime()'), source.includes('t=120') ? 120 : 0);
     assert.equal(result.end, '10:00.000');
     assert.equal(result.markers[1].left, '100%');
     for (const marker of result.markers) {

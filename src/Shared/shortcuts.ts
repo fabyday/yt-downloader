@@ -6,6 +6,9 @@ export const DEFAULT_SHORTCUTS = {
   frameBack: "Alt+ArrowLeft", frameForward: "Alt+ArrowRight",
   setStart: "A", setEnd: "S",
   modeClamp: "Q", modeFollow: "W", modeFree: "E",
+  volumeUp: "ArrowUp", volumeDown: "ArrowDown", mute: "M", volumePopup: "V",
+  pivotPlayhead: "1", pivotStart: "2", pivotEnd: "3",
+  zoomIn: "Shift+ArrowUp", zoomOut: "Shift+ArrowDown", zoomReset: "Shift+0",
 };
 export type ShortcutAction = keyof typeof DEFAULT_SHORTCUTS;
 export type ShortcutBindings = Record<ShortcutAction, string>;

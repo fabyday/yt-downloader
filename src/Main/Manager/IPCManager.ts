@@ -201,6 +201,8 @@ export class IPCManager extends BaseManager<IpcReturnType> {
       this.workerManager.getClient().request("dependency.get", {}, YT_DLP_UPDATE_TIMEOUT_MS + 15_000),
     );
     ipcMain.handle("app:get-info", () => ({
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
       isPackaged: app.isPackaged,
       runtimeAppPath: process.platform === "darwin" ? macAppBundleForExecutable(process.execPath) : null,
       arch: process.arch,
@@ -263,13 +265,13 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     );
     ipcMain.handle(
       "queue:enqueue",
-      (_event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
-        this.workerManager.getClient().request("queue.enqueue", { item }),
+      (event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
+        this.workerManager.getClient().request("queue.enqueue", { item: this.windowManager.bindCompanionRequest(event.sender.id, item) }),
     );
     ipcMain.handle(
       "queue:update",
-      (_event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
-        this.workerManager.getClient().request("queue.update", { item }),
+      (event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
+        this.workerManager.getClient().request("queue.update", { item: this.windowManager.bindCompanionRequest(event.sender.id, item) }),
     );
     ipcMain.handle(
       "queue:remove",
@@ -309,8 +311,8 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     );
     ipcMain.handle(
       "tabs:update-title",
-      (event: IpcMainInvokeEvent, title: string) =>
-        this.windowManager.updateTabTitle(event.sender.id, title),
+      (event: IpcMainInvokeEvent, title: string, sourceKey?: string) =>
+        this.windowManager.updateTabTitle(event.sender.id, title, sourceKey),
     );
     ipcMain.handle("window:open-queue", () => {
       this.windowManager.openQueueWindow();

@@ -59,12 +59,14 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   const windows = [];
   const views = [];
   const menus = [];
+  let contentsSequence=0;
   class Contents extends EventEmitter {
+    constructor(){super();this.id=++contentsSequence;}
     isDestroyed() { return false; }
     setWindowOpenHandler() {}
     loadURL(url) { this.url = url; return Promise.resolve(); }
     send() {}
-    focus() {}
+    focus() { this.focused=true; }
     close() {}
   }
   class Window extends EventEmitter {
@@ -78,7 +80,10 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
     isDestroyed() { return false; }
     loadURL(url) { return this.webContents.loadURL(url); }
     destroy() {}
-    show() {}
+    show() { this.shown=true; }
+    isMinimized() { return !!this.minimized; }
+    restore() { this.minimized=false; this.restored=true; }
+    focus() { this.focused=true; }
   }
   class View {
     constructor() { this.webContents = new Contents(); views.push(this); }
@@ -90,7 +95,7 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   const originalLoad = Module._load;
   Module._load = function (name, ...args) {
     if (name === 'electron') return {
-      app: { quit() {} }, BrowserWindow: Window, WebContentsView: View,
+      app: { quit() {}, focus() {} }, BrowserWindow: Window, WebContentsView: View,
       Menu: { setApplicationMenu: (menu) => menus.push(menu) },
       screen: { getPrimaryDisplay: () => display, getDisplayNearestPoint: () => display, getCursorScreenPoint: () => ({ x: 0, y: 0 }) },
     };
@@ -99,12 +104,15 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   let WindowManager;
   try { ({ WindowManager } = require('../src/Main/Manager/WindowManager.ts')); }
   finally { Module._load = originalLoad; }
-  const manager = new WindowManager('http://127.0.0.1:4173/');
+  const accepted=[];
+  const manager = new WindowManager('http://127.0.0.1:4173/',{acceptDeepLink:request=>accepted.push(request)});
   assert.equal((await manager.initialize()).ok, true);
   manager.createTab();
   manager.openQueueWindow();
   assert.deepEqual(menus, [null]);
   assert.equal(windows.length, 2);
+  assert.equal(windows[0].options.minWidth,1100);
+  assert.equal(windows[0].options.minHeight,820);
   for (const win of windows) {
     assert.equal(win.menu, null);
     assert.equal(win.options.titleBarStyle, 'hidden');
@@ -118,5 +126,34 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   for (const view of views) {
     assert.deepEqual(view.bounds, { x: 0, y: 88, width: 1200, height: 632 });
   }
+  const external = (url, requestId='request-0001') => {
+    const link=new URL('yt-downloader://open');
+    link.searchParams.set('url',url);link.searchParams.set('requestId',requestId);
+    link.searchParams.set('callback','http://127.0.0.1:12345/callback');link.searchParams.set('token','x'.repeat(32));
+    return link.href;
+  };
+  windows[0].minimized=true;
+  assert.equal(manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4')),true);
+  const first=manager.getTabSnapshot();
+  assert.equal(first.tabs.length,3);
+  assert.equal(first.activeTabId,first.tabs.at(-1).id);
+  assert.ok(windows[0].restored&&windows[0].shown&&windows[0].focused);
+  assert.equal(views.at(-1).webContents.focused,true);
+  manager.openExternalUrl(external('https://www.youtube.com/watch?v=woyNiKxoDS4&t=12','request-0002'));
+  assert.equal(manager.getTabSnapshot().tabs.length,3,'same video with another URL reuses its tab');
+  assert.equal(manager.getTabSnapshot().activeTabId,first.activeTabId);
+  const contents=views.at(-1).webContents;
+  const item={payload:{url:'https://youtu.be/woyNiKxoDS4'},companionRequestId:'request-0001'};
+  assert.equal(manager.bindCompanionRequest(contents.id,item).companionRequestId,'request-0002');
+  manager.updateTabTitle(contents.id,'Manually replaced','ip7NSleQ8_U');
+  assert.equal(manager.bindCompanionRequest(contents.id,item).companionRequestId,undefined);
+  manager.openExternalUrl(external('https://youtu.be/ip7NSleQ8_U'));
+  assert.equal(manager.getTabSnapshot().tabs.length,3,'manual source changes update the identity');
+  manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4'));
+  assert.equal(manager.getTabSnapshot().tabs.length,4,'old source gets a new tab after replacement');
+  for(let i=0;i<12;i++) manager.openExternalUrl(external('https://chzzk.naver.com/video/'+(100+i)));
+  assert.equal(manager.getTabSnapshot().tabs.length,16,'external requests do not disappear at the former 12-tab limit');
+  assert.equal(manager.getTabSnapshot().activeTabId,manager.getTabSnapshot().tabs.at(-1).id);
+  assert.equal(manager.openExternalUrl('https://example.com'),false);
   await manager.finalize();
 });

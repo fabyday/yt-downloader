@@ -12,6 +12,8 @@ import {
   successReturnCode,
   type ReturnCode,
 } from "../../Common/RetCode";
+import { parseVideoSource, previewSource } from "../../Shared/VideoSource";
+import type { DownloadQueueItem } from "../../Shared/types";
 import type { BrowserTabSnapshot } from "../../Shared/types";
 import { parseDownloaderDeepLink } from "../ExternalProtocol";
 import {
@@ -24,11 +26,11 @@ import { CompanionManager } from "./CompanionManager";
 import { PREVIEW_PARTITION } from "../PreviewCookies";
 import { WindowReturnType } from "./ReturnTypes";
 
-const MAX_TABS = 12;
-
 interface ManagedTab {
   id: string;
   title: string;
+  sourceKey?: string;
+  companionRequestId?: string;
   view: WebContentsView;
 }
 
@@ -118,10 +120,6 @@ export class WindowManager extends BaseManager<WindowReturnType> {
   }
 
   createTab(sourceUrl?: string, companionRequestId?: string): BrowserTabSnapshot {
-    if (this.tabs.size >= MAX_TABS) {
-      return this.getTabSnapshot();
-    }
-
     const mainWindow = this.requireMainWindow();
     this.tabSequence += 1;
     const id = `tab-${this.tabSequence}`;
@@ -131,6 +129,8 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     const tab: ManagedTab = {
       id,
       title: `Video ${this.tabSequence}`,
+      sourceKey: sourceUrl ? parseVideoSource(sourceUrl)?.key : undefined,
+      companionRequestId,
       view,
     };
 
@@ -171,8 +171,15 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       return false;
     }
     this.companionManager.acceptDeepLink(request);
+    const key = parseVideoSource(request.sourceUrl)?.key;
+    const existing = key ? [...this.tabs.values()].find(tab => tab.sourceKey === key && !tab.view.webContents.isDestroyed()) : undefined;
+    if (existing) {
+      existing.companionRequestId = request.companion?.requestId;
+      this.activateTab(existing.id);
+    } else {
+      this.createTab(request.sourceUrl, request.companion?.requestId);
+    }
     this.focusMainWindow();
-    this.createTab(request.sourceUrl, request.companion?.requestId);
     return true;
   }
 
@@ -181,6 +188,9 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     if (this.mainWindow.isMinimized()) this.mainWindow.restore();
     this.mainWindow.show();
     this.mainWindow.focus();
+    if (process.platform === "darwin") app.focus({ steal: true });
+    const active = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined;
+    active?.view.webContents.focus();
   }
 
   activateTab(tabId: string): BrowserTabSnapshot {
@@ -229,16 +239,31 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     return this.getTabSnapshot();
   }
 
-  updateTabTitle(webContentsId: number, rawTitle: string): BrowserTabSnapshot {
+  updateTabTitle(webContentsId: number, rawTitle: string, sourceKey?: string): BrowserTabSnapshot {
     const tab = [...this.tabs.values()].find(
       (candidate) => candidate.view.webContents.id === webContentsId,
     );
+    if (tab && sourceKey !== undefined) {
+      const key = previewSource(sourceKey)?.key;
+      if (key && key !== tab.sourceKey) {
+        tab.sourceKey = key;
+        tab.companionRequestId = undefined;
+      }
+    }
     const title = rawTitle.trim().replace(/\s+/g, " ").slice(0, 80);
     if (tab && title && tab.title !== title) {
       tab.title = title;
       this.emitTabsChanged();
     }
     return this.getTabSnapshot();
+  }
+
+  bindCompanionRequest(webContentsId: number, item: DownloadQueueItem): DownloadQueueItem {
+    const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents.id === webContentsId);
+    if (!tab) return item; // Queue-window edits retain their original request.
+    const { companionRequestId: _previous, ...rest } = item;
+    const requestId = parseVideoSource(item.payload.url)?.key === tab.sourceKey ? tab.companionRequestId : undefined;
+    return { ...rest, ...(requestId ? { companionRequestId: requestId } : {}) };
   }
 
   openQueueWindow(): void {
@@ -304,7 +329,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       backgroundColor: "#111317",
       center: true,
       height,
-      minHeight: Math.min(720, height),
+      minHeight: Math.min(820, height),
       minWidth: Math.min(1100, width),
       title: "kawai-downloader",
       webPreferences: this.createWebPreferences(),

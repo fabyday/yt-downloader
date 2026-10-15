@@ -12,7 +12,7 @@ app.whenReady().then(async()=>{
   const js=script=>win.webContents.executeJavaScript(script);
   await js(`new Promise(resolve=>{const timer=setInterval(()=>{if(window.mockPlayer&&document.querySelector('#endTime')?.textContent==='10:00.000'){clearInterval(timer);resolve();}},50);})`);
   await js(`window.testSeek = time => {
-    const input=document.querySelector('#timelineInput');const rect=input.getBoundingClientRect();
+    const input=document.querySelector('#timelineRuler');const rect=input.getBoundingClientRect();
     const options={bubbles:true,cancelable:true,button:0,pointerId:42,clientX:rect.left+rect.width*time/600,clientY:rect.top+10};
     input.dispatchEvent(new PointerEvent('pointerdown',options));
     window.dispatchEvent(new PointerEvent('pointerup',options));
@@ -40,7 +40,7 @@ app.whenReady().then(async()=>{
     await js('window.testSeek(100)');
     await new Promise(resolve=>setTimeout(resolve,80));
     await key('Right');
-    assert.equal(await js('window.mockPlayer.getCurrentTime()'),101,`${id}: one global seek, not slider/marker adjustment`);
+    assert.ok(Math.abs(await js('window.mockPlayer.getCurrentTime()')-101)<1e-6,`${id}: one global seek, not slider/marker adjustment`);
     assert.equal(await js("document.querySelector('#startTime').textContent"),before.start);
   }
   const editing=await js(`(()=>{
@@ -53,15 +53,18 @@ app.whenReady().then(async()=>{
     const positions=[];
     for(const time of [0,300,600]) {
       window.testSeek(time);await new Promise(resolve=>setTimeout(resolve,100));
-      const ruler=document.querySelector('#timelineRulerPlayhead').getBoundingClientRect();
+      const ruler=document.querySelector('#timelineRuler').getBoundingClientRect();
+      const surface=document.querySelector('.timeline-surface').getBoundingClientRect();
       const line=document.querySelector('.timeline-current-line').getBoundingClientRect();
       const shell=document.querySelector('#timelineShell').getBoundingClientRect();
-      positions.push({time,rulerX:ruler.left+ruler.width/2,lineX:line.left+line.width/2,expected:shell.left+Math.max(1.5,Math.min(shell.width-1.5,shell.width*time/600))});
+      positions.push({time,top:line.top,rulerTop:ruler.top,bottom:line.bottom,surfaceBottom:surface.bottom-1,lineX:line.left+line.width/2,expected:shell.left+Math.max(1.5,Math.min(shell.width-1.5,shell.width*time/600))});
     }
     const handle=getComputedStyle(document.querySelector('#currentTimeHandle'));
-    return {positions,color:getComputedStyle(document.querySelector('.timeline-current-line')).backgroundColor,background:handle.backgroundColor,shadow:handle.boxShadow,triangle:getComputedStyle(document.querySelector('#timelineRulerPlayhead'),'::after').content};
+    return {positions,color:getComputedStyle(document.querySelector('.timeline-current-line')).backgroundColor,background:handle.backgroundColor,shadow:handle.boxShadow,triangle:getComputedStyle(document.querySelector('.timeline-current-line'),'::after').content};
   })()`);
-  for(const point of geometry.positions){assert.ok(Math.abs(point.rulerX-point.lineX)<0.6);assert.ok(Math.abs(point.lineX-point.expected)<0.6);}
+  for(const point of geometry.positions){assert.ok(Math.abs(point.top-point.rulerTop)<0.6);assert.ok(Math.abs(point.bottom-point.surfaceBottom)<0.6);assert.ok(Math.abs(point.lineX-point.expected)<0.6);}
+  assert.equal(await js(`document.querySelectorAll('.timeline-current-line').length`),1);
+  assert.equal(await js(`document.querySelector('#timelineRulerPlayhead')`),null);
   assert.equal(geometry.color,'rgb(255, 77, 94)');assert.equal(geometry.background,'rgba(0, 0, 0, 0)');assert.equal(geometry.shadow,'none');assert.equal(geometry.triangle,'none');
   if(process.argv.includes('--screenshot')) {
     const bounds=await js(`(()=>{const r=document.querySelector('.timeline-panel').getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()`);

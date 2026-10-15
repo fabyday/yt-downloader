@@ -1,13 +1,4 @@
-import {
-  Badge,
-  Button,
-  Flex,
-  Panel,
-  Stack,
-  Surface,
-  Switch,
-  Text,
-} from "@kawaikara/kawai-ui";
+import { Badge, Button, Flex, Panel, SocialBadge, Stack, Switch, Text } from "@kawaikara/kawai-ui";
 import { useEffect, useState } from "react";
 import type { AppInfo, AppUpdateInfo } from "../../Shared/types";
 import { useI18n } from "../I18nProvider";
@@ -18,109 +9,103 @@ interface PreferenceAppInfoProps {
   onAutomaticUpdatesChange: (checked: boolean) => void;
 }
 
-export function PreferenceAppInfo({
-  automaticUpdates,
-  onAutomaticUpdatesChange,
-}: PreferenceAppInfoProps) {
+const links = [
+  { brand: "website", url: "https://kawaikara.github.io/" },
+  { brand: "github", url: "https://github.com/fabyday/yt-downloader" },
+  { brand: "discord", url: "https://discord.gg/JJs974BX45" },
+  { brand: "youtube", url: "https://www.youtube.com/@molera1708" },
+] as const;
+
+export function PreferenceAppInfo({ automaticUpdates, onAutomaticUpdatesChange }: PreferenceAppInfoProps) {
   const { t } = useI18n();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<AppUpdateInfo | null>(null);
-
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [linkFailed, setLinkFailed] = useState(false);
+  const [ffmpeg, setFfmpeg] = useState("…");
   useEffect(() => {
     let active = true;
-    void window.ytClipper.getAppInfo().then((info) => {
-      if (active) setAppInfo(info);
-    });
+    void window.ytClipper.getAppInfo().then(info => { if (active) setAppInfo(info); })
+      .catch(() => { if (active) setLoadFailed(true); });
+    void window.ytClipper.getDependencyStatus().then(info => {
+      if (active) setFfmpeg(info.ffmpeg.version || t("appInfo.unavailable"));
+    }).catch(() => { if (active) setFfmpeg(t("appInfo.unavailable")); });
     if (automaticUpdates) {
       setChecking(true);
-      void window.ytClipper.checkForUpdates().then((result) => {
-        if (active) {
-          setUpdate(result);
-          setChecking(false);
-        }
-      });
+      void window.ytClipper.checkForUpdates().then(result => { if (active) setUpdate(result); })
+        .catch(() => { if (active) setUpdate({ status: "error", currentVersion: "", latestVersion: null, releaseUrl: null, message: "" }); })
+        .finally(() => { if (active) setChecking(false); });
     }
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
-
   const checkForUpdates = async () => {
+    if (checking) return;
     setChecking(true);
-    try {
-      setUpdate(await window.ytClipper.checkForUpdates());
-    } finally {
-      setChecking(false);
-    }
+    try { setUpdate(await window.ytClipper.checkForUpdates()); }
+    catch { setUpdate({ status: "error", currentVersion: appInfo?.version ?? "", latestVersion: null, releaseUrl: null, message: "" }); }
+    finally { setChecking(false); }
   };
-
-  return (
-    <Stack gap="md" className="preference-app-info">
-      <YtDlpUpdateInfo />
-      <Panel padding="lg" radius="md" className="app-identity-card">
-        <Stack gap="xs">
-          <Text size="xs" weight="semibold" className="download-eyebrow">
-            kawai-downloader
-          </Text>
-          <Text size="lg" weight="semibold">
-            {appInfo?.name ?? t("app.documentTitle")}
-          </Text>
+  const openLink = async (url: string) => {
+    setLinkFailed(false);
+    try { if (!await window.ytClipper.openExternalUrl(url)) setLinkFailed(true); }
+    catch { setLinkFailed(true); }
+  };
+  return <Stack gap="md" className="preference-app-info">
+    <nav className="app-social-links" aria-label={t("appInfo.links")}>
+      {links.map(link => <SocialBadge key={link.brand} brand={link.brand}
+        label={t(`appInfo.link.${link.brand}`)} onClick={() => void openLink(link.url)} />)}
+    </nav>
+    {linkFailed && <Text size="sm" tone="danger" role="status">{t("appInfo.linkFailed")}</Text>}
+    <Panel padding="lg" radius="md" className="app-identity-card">
+      <Stack gap="md">
+        <div className="app-info-header">
+          <Flex align="center" gap="sm" className="app-info-identity">
+            <svg className="app-info-icon" aria-hidden="true" viewBox="0 0 40 40">
+              <rect x="2" y="2" width="36" height="36" rx="11" fill="currentColor" />
+              <path d="m16 11 14 9-14 9Z" fill="var(--kawai-color-background)" />
+            </svg>
+            <Stack gap="xs">
+              <Text size="lg" weight="semibold">{appInfo?.name ?? t("app.documentTitle")}</Text>
+              <Text size="sm" tone="muted">{t("appInfo.description")}</Text>
+            </Stack>
+          </Flex>
+          <Switch checked={automaticUpdates} label={t("preference.automaticUpdates")}
+            title={t("preference.automaticUpdatesDescription")} onCheckedChange={onAutomaticUpdatesChange} />
+        </div>
+        <div className="app-info-detail-row app-info-release-row">
+          <Text size="sm" tone="muted">{t("appInfo.version")}</Text>
           <Flex align="center" gap="sm" wrap>
-            <Badge>{t("preference.version", { version: appInfo?.version ?? "…" })}</Badge>
-            <Badge>{appInfo ? `${appInfo.platform} · ${appInfo.arch}` : "…"}</Badge>
-          </Flex>
-        </Stack>
-      </Panel>
-
-      <Panel padding="md" radius="md" className="preference-section-card">
-        <Stack gap="md">
-          <Switch
-            checked={automaticUpdates}
-            label={t("preference.automaticUpdates")}
-            description={t("preference.automaticUpdatesDescription")}
-            onCheckedChange={onAutomaticUpdatesChange}
-          />
-          <Flex align="center" gap="sm" justify="between" className="update-action-row">
-            <Button isLoading={checking} onClick={() => void checkForUpdates()}>
-              {checking
-                ? t("preference.checkingUpdates")
-                : t("preference.checkUpdates")}
+            <Badge>{appInfo?.version ?? "…"}</Badge>
+            <Button size="sm" variant="secondary" isLoading={checking} onClick={() => void checkForUpdates()}>
+              {checking ? t("preference.checkingUpdates") : t("preference.checkUpdates")}
             </Button>
-            {update?.status === "available" && update.releaseUrl ? (
-              <Button
-                variant="secondary"
-                onClick={() => void window.ytClipper.openExternalUrl(update.releaseUrl!)}
-              >
-                {t("preference.openRelease")}
-              </Button>
-            ) : null}
+            {update?.status === "available" && update.releaseUrl && <Button size="sm" variant="secondary" onClick={() => void openLink(update.releaseUrl!)}>{t("preference.openRelease")}</Button>}
           </Flex>
-          {update ? (
-            <Surface
-              padding="md"
-              radius="sm"
-              tone="muted"
-              className={update.status === "error" ? "update-status-error" : undefined}
-              aria-live="polite"
-            >
-              <Stack gap="xs">
-                <Text size="sm" weight="semibold">
-                  {t(`preference.updateStatus.${update.status}`)}
-                </Text>
-                <Text size="sm" tone="muted">
-                  {update.latestVersion
-                    ? t("preference.latestVersion", {
-                        current: update.currentVersion,
-                        latest: update.latestVersion,
-                      })
-                    : update.message}
-                </Text>
-              </Stack>
-            </Surface>
-          ) : null}
-        </Stack>
-      </Panel>
-    </Stack>
-  );
+        </div>
+        <div className="app-info-detail-row">
+          <Text size="sm" tone="muted">{t("appInfo.platform")}</Text>
+          <Text size="sm">{appInfo ? `${appInfo.platform === "darwin" ? "macOS" : appInfo.platform === "win32" ? "Windows" : appInfo.platform} · ${appInfo.arch}` : "…"}</Text>
+        </div>
+        {appInfo?.electronVersion && <div className="app-info-detail-row">
+          <Text size="sm" tone="muted">{t("appInfo.runtime")}</Text>
+          <Text size="sm">Electron {appInfo.electronVersion} · Chromium {appInfo.chromeVersion}</Text>
+        </div>}
+        {loadFailed && <Text role="status" tone="danger" size="sm">{t("appInfo.unavailable")}</Text>}
+        <div className="app-info-update-status" role="status" aria-live="polite">
+          {update && <Stack gap="xs">
+            <Text size="sm" tone={update.status === "error" ? "danger" : "muted"}>{t(`preference.updateStatus.${update.status}`)}</Text>
+            {update.latestVersion && <Text size="xs" tone="muted">{t("preference.latestVersion", { current: update.currentVersion, latest: update.latestVersion })}</Text>}
+          </Stack>}
+        </div>
+      </Stack>
+    </Panel>
+    <YtDlpUpdateInfo />
+    <Panel padding="md" radius="md" className="preference-section-card">
+      <div className="app-info-detail-row">
+        <Text size="sm" weight="semibold">FFmpeg</Text>
+        <Text size="xs" className="app-info-binary-version">{ffmpeg}</Text>
+      </div>
+    </Panel>
+  </Stack>;
 }
