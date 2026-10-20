@@ -205,9 +205,20 @@ export interface YtClipperApi {
   getAppInfo(): Promise<AppInfo>;
   checkForUpdates(): Promise<AppUpdateInfo>;
   openExternalUrl(url: string): Promise<boolean>;
+  openKawaikara(): Promise<boolean>;
+  developmentConnection(operation: "status" | "connect" | "disconnect" | "automatic", hostId?: string): Promise<DevelopmentConnectionStatus>;
   getPreferences(): Promise<AppPreferences>;
   updatePreferences(preferences: Partial<AppPreferences>): Promise<AppPreferences>;
   onBrowserTabsChanged(handler: (snapshot: BrowserTabSnapshot) => void): () => void;
   onDownloadQueueChanged(handler: (items: DownloadQueueItem[]) => void): () => void;
   onPreferencesChanged(handler: (preferences: AppPreferences) => void): () => void;
+}
+
+/** Public development connection state; authentication material is Main-only. */
+export interface DevelopmentConnectionStatus {
+  automatic?: boolean;
+  development: boolean;
+  state: "disconnected" | "connecting" | "connected" | "waiting" | "denied" | "failed" | "selectHost" | "disconnectFirst" | "pendingDisconnect";
+  hostId?: string;
+  hosts?: string[];
 }

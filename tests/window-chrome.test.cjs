@@ -64,7 +64,8 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
     constructor(){super();this.id=++contentsSequence;}
     isDestroyed() { return false; }
     setWindowOpenHandler() {}
-    loadURL(url) { this.url = url; return Promise.resolve(); }
+    loadURL(url) { this.url = url; this.loads = (this.loads || 0) + 1; this.hasInput = false; return Promise.resolve(); }
+    executeJavaScript() { return Promise.resolve(!!this.hasInput); }
     send() {}
     focus() { this.focused=true; }
     close() {}
@@ -155,5 +156,24 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   assert.equal(manager.getTabSnapshot().tabs.length,16,'external requests do not disappear at the former 12-tab limit');
   assert.equal(manager.getTabSnapshot().activeTabId,manager.getTabSnapshot().tabs.at(-1).id);
   assert.equal(manager.openExternalUrl('https://example.com'),false);
+  for (const tab of manager.getTabSnapshot().tabs.slice(0, -1)) await manager.closeTab(tab.id);
+  const last = manager.getTabSnapshot().tabs[0];
+  const lastView = views.at(-1);
+  const viewCount = views.length;
+  const loads = lastView.webContents.loads;
+  await Promise.all([manager.closeTab(last.id), manager.closeTab(last.id)]);
+  assert.equal(manager.getTabSnapshot().tabs.length, 1);
+  assert.equal(manager.getTabSnapshot().activeTabId, last.id);
+  assert.equal(views.length, viewCount, 'reset must reuse the existing view');
+  assert.equal(lastView.webContents.loads, loads + 1, 'rapid double close resets only once');
+  assert.equal(new URL(lastView.webContents.url).searchParams.has('sourceUrl'), false);
+  assert.equal(manager.companionRequestFor(lastView.webContents.id, 'https://chzzk.naver.com/video/111'), undefined);
+  for (let i = 0; i < 5; i++) await manager.closeTab(last.id);
+  assert.equal(lastView.webContents.loads, loads + 1, 'blank last tab must not reload');
+  assert.equal(manager.getTabSnapshot().tabs[0].title, 'Video 1');
+  lastView.webContents.hasInput = true;
+  await manager.closeTab(last.id);
+  assert.equal(lastView.webContents.loads, loads + 2, 'typed but unloaded URLs also reset');
+  assert.equal(views.length, viewCount);
   await manager.finalize();
 });

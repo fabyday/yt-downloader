@@ -335,6 +335,11 @@ const mockBridge = `(() => {
       window.__mockExternalUrl = url;
       return true;
     },
+    developmentConnection: async () => ({ development: false, state: "disconnected" }),
+    openKawaikara: async () => {
+      window.__mockKawaikaraOpened = true;
+      return true;
+    },
     getPreferences: async () => structuredClone(preferences),
     updatePreferences: async (updates) => {
       preferences = { ...preferences, ...updates };

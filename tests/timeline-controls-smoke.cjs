@@ -24,12 +24,13 @@ app.whenReady().then(async()=>{
     (document.activeElement||document.body).dispatchEvent(new KeyboardEvent('keyup',options));
   };
   window.seekRuler(100);document.querySelector('#setStartButton').click();window.seekRuler(500);document.querySelector('#setEndButton').click();window.seekRuler(300);void 0;`);
-  // Hit-test the real blank area above/below the bar, at a 6px offset from a selector.
-  for(const [kind,time,delta,row] of [['start',100,60,'top'],['end',500,-60,'bottom'],['playhead',300,30,'top']]) {
+  // Selectors own their bracket row; blank rows belong to playback.
+  for(const [kind,time,delta,row] of [['start',100,60,'marker'],['end',500,-60,'marker'],['playhead',300,30,'top']]) {
     const result=await js(`(()=>{
       const area=document.querySelector('#timelineInteractionArea'),r=area.getBoundingClientRect();
       const track=document.querySelector('#timelineInput').getBoundingClientRect();
-      const x=track.left+track.width*${time}/600+6,y=${JSON.stringify(row)}==='top'?r.top+4:r.bottom-4;
+      const marker=document.querySelector(${JSON.stringify('#'+kind+'MarkerHandle')})?.getBoundingClientRect();
+      const x=track.left+track.width*${time}/600+6,y=${JSON.stringify(row)}==='marker'?(marker.top+marker.bottom)/2:r.top+4;
       const target=document.elementFromPoint(x,y);
       const options={bubbles:true,cancelable:true,button:0,pointerId:42,clientX:x,clientY:y};
       const read=()=>Number(document.querySelector(${JSON.stringify(kind==='playhead'?'#currentTime':'#'+kind+'Time')}).getAttribute('aria-valuenow'));
@@ -44,6 +45,31 @@ app.whenReady().then(async()=>{
   const ranges=await js(`({start:Number(document.querySelector('#startTime').getAttribute('aria-valuenow')),end:Number(document.querySelector('#endTime').getAttribute('aria-valuenow'))})`);
   await js(`window.seekRuler(${ranges.start});void 0;`);
   assert.equal(await js(`Number(document.querySelector('#startTime').getAttribute('aria-valuenow'))`),ranges.start,'ruler never edits selector');
+  // Real DOM hit testing when the red playhead and a bracket share the same X.
+  for (const kind of ['start', 'end']) {
+    for (const row of ['ruler', 'above', 'below']) {
+      await js(`window.seekRuler(${ranges[kind]});void 0;`);
+      const result = await js(`(() => {
+        const track=document.querySelector('#timelineInput').getBoundingClientRect();
+        const marker=document.querySelector('#${kind}MarkerHandle').getBoundingClientRect();
+        const ruler=document.querySelector('#timelineRuler').getBoundingClientRect();
+        const x=track.left+track.width*${ranges[kind]}/600;
+        const y=${JSON.stringify(row)}==='ruler'?ruler.top+10:${JSON.stringify(row)}==='above'?marker.top-4:marker.bottom+4;
+        const target=document.elementFromPoint(x,y);
+        const event={bubbles:true,cancelable:true,button:0,pointerId:43,clientX:x,clientY:y};
+        const before=Number(document.querySelector('#${kind}Time').getAttribute('aria-valuenow'));
+        target.dispatchEvent(new PointerEvent('pointerdown',event));
+        window.dispatchEvent(new PointerEvent('pointermove',{...event,clientX:x+15}));
+        window.dispatchEvent(new PointerEvent('pointerup',{...event,clientX:x+15}));
+        return {hit:target.id,before,after:Number(document.querySelector('#${kind}Time').getAttribute('aria-valuenow')),
+          playhead:Number(document.querySelector('#currentTime').getAttribute('aria-valuenow')),
+          expected:${ranges[kind]}+15/track.width*600};
+      })()`);
+      assert.equal(result.hit,'currentTimeHandle',kind+' '+row+' hits red line');
+      assert.equal(result.after,result.before,kind+' '+row+' must not change selection');
+      assert.ok(Math.abs(result.playhead-result.expected)<0.01,kind+' '+row+' moves playhead');
+    }
+  }
   // Position a distinct playhead, then zoom around the start selector from the far-right wheel position.
   await js(`window.seekRuler(300);document.querySelector('#zoomPivot-start').click();void 0;`);
   const before=await js(`document.querySelector('#startMarkerHandle').getBoundingClientRect().left`);

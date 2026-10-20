@@ -61,13 +61,14 @@
     "react-dom": "^19.2.8"
   },
   "build": {
-    "appId": "com.ytdownloader.app",
+    "appId": "day.faby.kawai-downloader",
     "productName": "kawai-downloader",
     "asarUnpack": ["build/worker/yt-dlp-plugins/**/*"],
     "protocols": [
       {
         "name": "kawai-downloader URL",
         "schemes": [
+          "kawai-downloader",
           "yt-downloader"
         ]
       }
@@ -76,8 +77,10 @@
       "output": "dist"
     },
     "files": [
+      "resources/app-icon.png",
       "build/**/*",
-      "package.json"
+      "package.json",
+      "kawaikara-companion.json"
     ],
     "win": {
       "target": [

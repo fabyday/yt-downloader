@@ -1,6 +1,8 @@
 export { isSupportedYouTubeUrl } from "../Shared/YouTubeSource";
 
-export const YT_DOWNLOADER_PROTOCOL = "yt-downloader";
+/** Canonical launch scheme; the previous scheme remains an inbound compatibility alias. */
+export const KAWAI_DOWNLOADER_PROTOCOL = "kawai-downloader";
+export const DOWNLOADER_PROTOCOLS = [KAWAI_DOWNLOADER_PROTOCOL, "yt-downloader"] as const;
 
 export interface CompanionCallbackDescriptor {
   callbackUrl: string;
@@ -14,7 +16,7 @@ export interface DownloaderDeepLinkRequest {
 }
 
 export function createDownloaderDeepLink(sourceUrl: string): string {
-  const deepLink = new URL(`${YT_DOWNLOADER_PROTOCOL}://open`);
+  const deepLink = new URL(`${KAWAI_DOWNLOADER_PROTOCOL}://open`);
   deepLink.searchParams.set("url", sourceUrl);
   return deepLink.toString();
 }
@@ -27,7 +29,7 @@ export function parseDownloaderDeepLink(value: string): DownloaderDeepLinkReques
   try {
     const deepLink = new URL(value);
     if (
-      deepLink.protocol !== `${YT_DOWNLOADER_PROTOCOL}:` ||
+      !DOWNLOADER_PROTOCOLS.some((scheme) => deepLink.protocol === `${scheme}:`) ||
       deepLink.hostname !== "open"
     ) {
       return null;
@@ -65,7 +67,7 @@ function isLoopbackCallbackUrl(value: string): boolean {
 
 export function findDownloaderDeepLink(values: readonly string[]): string | null {
   return (
-    values.find((value) => value.startsWith(`${YT_DOWNLOADER_PROTOCOL}://`)) ??
+    values.find((value) => DOWNLOADER_PROTOCOLS.some((scheme) => value.startsWith(`${scheme}://`))) ??
     null
   );
 }

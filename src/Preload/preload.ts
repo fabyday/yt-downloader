@@ -27,6 +27,8 @@ const api: YtClipperApi = {
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
   openExternalUrl: (url) => ipcRenderer.invoke("app:open-external", url),
+  developmentConnection: (operation, hostId) => ipcRenderer.invoke("app:development-connection", operation, hostId),
+  openKawaikara: () => ipcRenderer.invoke("app:open-kawaikara"),
   selectOutputDir: (locale) =>
     ipcRenderer.invoke("dialog:select-output-dir", locale),
   enqueueDownload: (item) => ipcRenderer.invoke("queue:enqueue", item),

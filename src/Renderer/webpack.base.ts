@@ -35,6 +35,7 @@ const config: Configuration = {
   plugins: [
     new CopyPlugin({
       patterns: [
+        { from: path.resolve(__dirname, "../../resources/app-icon.png"), to: "app-icon.png" },
         {
           from: path.resolve(__dirname, "index.html"),
           to: "index.html"

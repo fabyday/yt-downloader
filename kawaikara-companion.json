@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "com.ytdownloader.app",
+  "id": "day.faby.kawai-downloader",
   "name": "kawai-downloader",
   "transport": {
     "type": "url-scheme",
-    "scheme": "yt-downloader",
+    "scheme": "kawai-downloader",
     "action": "open"
   },
   "capabilities": [

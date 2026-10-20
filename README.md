@@ -71,3 +71,4 @@ Download only content you own or have permission to save. Never share your cooki
 - [한국어 소개 및 사용법](Docs/READMEKR.MD)
 - [Detailed usage guide (한국어)](Docs/USAGEKR.md)
 - [Development notes (한국어)](Docs/DEVELOPMENT.md)
+- [Kawaikara integration identity](Docs/ExternalApps.md)

@@ -1,3 +1,4 @@
+import { CompanionCookies } from './CompanionCookies';
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as net from "node:net";
@@ -64,13 +65,14 @@ export async function startWorker(): Promise<void> {
       })
     : undefined;
 
+  const companionCookies = new CompanionCookies();
   const engine = new DownloadEngine({
     cacheDirectory: options.cacheDirectory,
     ffmpegPath: options.ffmpegPath,
     nodeRuntimePath: options.nodeRuntimePath,
     ytDlpPath: options.ytDlpPath,
     resolveYtDlpPath: ytDlpUpdate?.getPath,
-    createCookieSnapshot: url => cookieStore(parseVideoSource(url)?.site).createSnapshot(),
+    createCookieSnapshot: (url, requestId) => requestId ? companionCookies.snapshot(requestId, url) : cookieStore(parseVideoSource(url)?.site).createSnapshot(),
   });
   const clients = new Set<ClientSession>();
   let stateRevision = 0;
@@ -79,7 +81,7 @@ export async function startWorker(): Promise<void> {
 
   const queue = new DownloadQueueService({
     cancel: (jobId) => engine.cancel(jobId),
-    execute: (request, onProgress) => engine.execute(request, onProgress),
+    execute: (request, onProgress, requestId) => engine.execute(request, onProgress, requestId),
     load: async () => {
       try {
         return await fs.readFile(statePath, "utf8");
@@ -176,6 +178,12 @@ export async function startWorker(): Promise<void> {
       }
 
       switch (request.method) {
+        case "companion.prepare": {
+          const params = request.params as import('../Shared/workerProtocol').WorkerRequestMap['companion.prepare'];
+          companionCookies.set(params.requestId, params.sourceUrl, params.cookies);
+          sendResult(session.socket, request, { prepared: true });
+          return;
+        }
         case "preview.resolve": {
           const videoId = (request.params as { videoId?: unknown }).videoId;
           const source = previewSource(videoId);
@@ -183,7 +191,8 @@ export async function startWorker(): Promise<void> {
             sendResult(session.socket, request, { ok: false, error: "preview.failed" });
             return;
           }
-          const snapshot = await cookieStore(source.site).createSnapshot();
+          const requestId = (request.params as { companionRequestId?: string }).companionRequestId;
+          const snapshot = requestId ? await companionCookies.snapshot(requestId, source.url) : await cookieStore(source.site).createSnapshot();
           try {
             sendResult(session.socket, request, await resolvePreview(source.key, {
               command: await (ytDlpUpdate?.getPath() ?? Promise.resolve(options.ytDlpPath)),

@@ -72,7 +72,9 @@ export function BrowserTabStrip() {
                 aria-label={t("tabs.close", { title: tab.title })}
                 title={t("tabs.close", { title: tab.title })}
                 onClick={() => {
-                  void window.ytClipper.closeBrowserTab(tab.id);
+                  void window.ytClipper.closeBrowserTab(tab.id).catch(() => {
+                    // A failed reset leaves the existing tab available for retry.
+                  });
                 }}
               >
                 ×

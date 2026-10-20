@@ -824,8 +824,8 @@ body[data-view="queue"] {
 
 .timeline-current-hitarea {
   position: absolute;
-  top: calc(var(--timeline-ruler-height) + var(--timeline-track-gap));
-  bottom: var(--timeline-bottom-gap);
+  top: 0;
+  bottom: 0;
   left: var(--timeline-current-position, 0%);
   width: 18px;
   height: auto;
@@ -890,10 +890,10 @@ body[data-view="queue"] {
 
 .timeline-marker {
   position: absolute;
-  top: 2px;
+  top: 8px;
   z-index: 5;
   width: 20px;
-  height: 34px;
+  height: 22px;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -906,8 +906,8 @@ body[data-view="queue"] {
 
 .timeline-marker::before {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
+  top: 0;
+  bottom: 0;
   width: 6px;
   border-color: currentColor;
   border-style: solid;

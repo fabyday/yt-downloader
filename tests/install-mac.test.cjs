@@ -43,7 +43,7 @@ test('offline mac installation verifies release, backs up app, scopes quarantine
     fs.mkdirSync(path.join(app,'Contents/Frameworks/Fixture.framework/Versions/A'),{recursive:true});
     fs.symlinkSync('A',path.join(app,'Contents/Frameworks/Fixture.framework/Versions/Current'));
     fs.writeFileSync(path.join(app, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
-      <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.ytdownloader.app</string>
+      <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>day.faby.kawai-downloader</string>
       <key>CFBundleShortVersionString</key><string>1.2.3</string>
       <key>CFBundleExecutable</key><string>fixture</string></dict></plist>`);
     const fixturePlist = path.join(app,'Contents/Info.plist');

@@ -55,6 +55,15 @@ async function main() {
     assert.equal(hello.ownership, ownership);
     assert.equal(hello.sessionId, sessionId);
     assert.deepEqual((await client.request("cookies.status", {})).sites.youtube, { configured: false, count: 0 });
+    assert.deepEqual(await client.request('companion.prepare', {
+      requestId: 'handoff-fixture', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk',
+      cookies: { format: 'records', cookies: [{ domain: '.youtube.com', name: 'SID', value: 'handoff-only', path: '/', secure: true }] },
+    }), { prepared: true });
+    assert.equal((await client.request('cookies.status', {})).configured, false, 'Companion credentials must not change persistent settings');
+    assert.equal(await client.request('cookies.preview', {}), null, 'Companion cookies must never enter browser preview IPC');
+    assert.deepEqual(await client.request('companion.prepare', {
+      requestId: 'public-fixture', sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk', cookies: null,
+    }), { prepared: true });
     await assert.rejects(client.request("cookies.import-browser", { browser: "unsupported" }), /cookies.invalidBrowser/);
     assert.deepEqual(await client.request("cookies.import", {
       contents: '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttest-only\n',

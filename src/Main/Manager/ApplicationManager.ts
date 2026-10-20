@@ -1,3 +1,6 @@
+import path from "node:path";
+import { DevelopmentConnection } from "../DevelopmentConnection";
+import { readDevelopmentAppIcon } from "../DevelopmentAppIcon";
 import { app, dialog } from "electron";
 import {
   failureReturnCode,
@@ -18,6 +21,7 @@ import { CompanionManager } from "./CompanionManager";
 import { UpdateManager } from "./UpdateManager";
 
 export class ApplicationManager extends BaseManager<ApplicationReturnType> {
+  private developmentConnection?: DevelopmentConnection;
   private allowQuit = false;
   private initialized = false;
   private ipcManager: IPCManager | null = null;
@@ -100,12 +104,21 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
         rendererResult.data.url,
         this.companionManager,
       );
+      if (!app.isPackaged) {
+        this.developmentConnection = new DevelopmentConnection(
+          path.join(app.getPath("userData"), "kawaikara-development-connection.json"),
+          (url) => this.openExternalUrl(url),
+          undefined,
+          () => readDevelopmentAppIcon(path.join(app.getAppPath(), "resources", "app-icon.png")),
+        );
+      }
       this.ipcManager = new IPCManager(
         this.workerManager,
         this.windowManager,
         this.preferenceManager,
         this.updateManager,
         this.companionManager,
+        this.developmentConnection,
       );
       const ipcResult = await this.ipcManager.initialize();
       if (!ipcResult.ok) {
@@ -134,6 +147,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
       }
 
       this.initialized = true;
+      await this.developmentConnection?.start();
       return successReturnCode(
         ApplicationReturnType.Initialized,
         "Application initialized",
@@ -148,6 +162,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
   }
 
   async finalize(): Promise<ReturnCode<ApplicationReturnType>> {
+    await this.developmentConnection?.dispose();
     // Persist any last preview-cookie refresh while the Worker is still alive.
     const ipcResult = await this.ipcManager?.finalize();
     const results = await Promise.all([

@@ -38,7 +38,8 @@ export interface WorkerHelloResult {
 }
 
 export interface WorkerRequestMap {
-  "preview.resolve": { videoId: string };
+  "preview.resolve": { videoId: string; companionRequestId?: string };
+  "companion.prepare": { requestId: string; sourceUrl: string; cookies: CookieImportData | null };
   "cookies.preview": Record<string, never>;
   "cookies.browser-status": BrowserCookieOptions;
   "cookies.profiles": BrowserCookieOptions;
@@ -64,6 +65,7 @@ export interface WorkerRequestMap {
 }
 
 export interface WorkerResponseMap {
+  "companion.prepare": { prepared: boolean };
   "preview.resolve": import("./types").PreviewResult;
   "cookies.preview": string | null;
   "cookies.browser-status": BrowserProcessStatus;

@@ -77,7 +77,7 @@ interface DownloadEngineOptions {
   nodeRuntimePath: string;
   ytDlpPath: string;
   resolveYtDlpPath?: () => Promise<string>;
-  createCookieSnapshot?: (url: string) => Promise<{ path: string; dispose: () => Promise<void> } | null>;
+  createCookieSnapshot?: (url: string, companionRequestId?: string) => Promise<{ path: string; dispose: () => Promise<void> } | null>;
 }
 
 type ProgressExtra = Omit<
@@ -196,6 +196,7 @@ export class DownloadEngine {
   async execute(
     payload: DownloadRequest,
     onProgress: (progress: DownloadProgress) => void,
+    companionRequestId?: string,
   ): Promise<DownloadResult> {
     const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const job: DownloadJob = { id: jobId, children: [], canceled: false };
@@ -222,7 +223,7 @@ export class DownloadEngine {
       if (job.canceled) throw new Error(t(locale, "main.error.canceled"));
       await assertCommandAvailable(ytDlpPath, "yt-dlp", locale);
       await assertCommandAvailable(this.options.ffmpegPath, "ffmpeg", locale);
-      cookieSnapshot = await this.options.createCookieSnapshot?.(request.url) ?? null;
+      cookieSnapshot = await this.options.createCookieSnapshot?.(request.url, companionRequestId) ?? null;
       await fs.mkdir(request.outputDir, { recursive: true });
 
       tempDir = path.join(this.options.cacheDirectory, request.resumeKey);

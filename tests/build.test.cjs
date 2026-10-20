@@ -59,3 +59,17 @@ test('CI installs pnpm before enabling its cache; no local dependency override',
   assert.doesNotMatch(workflow, /^  (push|pull_request|schedule):/m);
   assert.match(require('../package.json').scripts.dev, /^pnpm run binaries:prepare &&/);
 });
+
+
+test('the packaged companion publishes the same stable identity and product name as the app', () => {
+  const pkg = require('../package.json');
+  const companion = require('../kawaikara-companion.json');
+  assert.equal(pkg.build.appId, 'day.faby.kawai-downloader');
+  assert.equal(companion.id, pkg.build.appId);
+  assert.equal(companion.name, pkg.build.productName);
+  assert.equal(companion.name, 'kawai-downloader');
+  assert.equal(companion.transport.scheme, 'kawai-downloader');
+  assert.ok(pkg.build.protocols.some(item => item.schemes.includes('yt-downloader')));
+  assert.ok(pkg.build.files.includes('kawaikara-companion.json'));
+  assert.ok(pkg.build.protocols.some(item => item.schemes.includes(companion.transport.scheme)));
+});

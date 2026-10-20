@@ -61,10 +61,7 @@ export function PreferenceAppInfo({ automaticUpdates, onAutomaticUpdatesChange }
       <Stack gap="md">
         <div className="app-info-header">
           <Flex align="center" gap="sm" className="app-info-identity">
-            <svg className="app-info-icon" aria-hidden="true" viewBox="0 0 40 40">
-              <rect x="2" y="2" width="36" height="36" rx="11" fill="currentColor" />
-              <path d="m16 11 14 9-14 9Z" fill="var(--kawai-color-background)" />
-            </svg>
+            <img className="app-info-icon" src="./app-icon.png" alt="" draggable={false} />
             <Stack gap="xs">
               <Text size="lg" weight="semibold">{appInfo?.name ?? t("app.documentTitle")}</Text>
               <Text size="sm" tone="muted">{t("appInfo.description")}</Text>

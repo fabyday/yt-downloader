@@ -3,6 +3,7 @@ const { test } = require("node:test");
 const http = require("node:http");
 const {
   createDownloaderDeepLink,
+  findDownloaderDeepLink,
   getSourceUrlFromDeepLink,
   isSupportedYouTubeUrl,
   parseDownloaderDeepLink,
@@ -103,7 +104,7 @@ test("companion callbacks report acceptance, deduplicated progress, and completi
       callbackUrl: `http://127.0.0.1:${address.port}/events`,
       token: "x".repeat(32),
     },
-  });
+  }, true);
   const item = {
     id: "queue-1",
     companionRequestId: requestId,
@@ -130,4 +131,16 @@ test("companion callbacks report acceptance, deduplicated progress, and completi
   ]);
   assert.equal(events[3].progress, 0.51);
   await new Promise(resolve => server.close(resolve));
+});
+
+
+test("canonical launch URLs and legacy incoming links resolve the same source", () => {
+  const source = "https://youtube.com/watch?v=fixture";
+  const canonical = createDownloaderDeepLink(source);
+  assert.equal(new URL(canonical).protocol, "kawai-downloader:");
+  for (const link of [canonical, canonical.replace("kawai-downloader:", "yt-downloader:")]) {
+    assert.equal(getSourceUrlFromDeepLink(link), source);
+    assert.equal(findDownloaderDeepLink(["electron", "main.js", link]), link);
+  }
+  assert.equal(findDownloaderDeepLink(["other-app://open"]), null);
 });

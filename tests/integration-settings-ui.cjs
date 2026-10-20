@@ -1,0 +1,32 @@
+const assert = require('node:assert/strict');
+const { app, BrowserWindow } = require('electron');
+const { once } = require('node:events');
+process.env.UI_HARNESS_PORT = '0';
+const server = require('./ui-harness.cjs');
+const ready = server.listening ? Promise.resolve() : once(server, 'listening');
+const deadline = setTimeout(() => app.exit(1), 30000);
+app.whenReady().then(async () => {
+  await ready;
+  const win = new BrowserWindow({ show: false, width: 1200, height: 950 });
+  await win.loadURL(`http://127.0.0.1:${server.address().port}/?view=editor`);
+  const result = await win.webContents.executeJavaScript(`(async () => {
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+    while (!document.querySelector('#openPreferenceOverlayButton')) await wait(50);
+    document.querySelector('#openPreferenceOverlayButton').click();
+    await wait(100);
+    const button = document.querySelector('#openKawaikaraButton');
+    let resolveOpen, count = 0;
+    window.ytClipper.openKawaikara = () => { count++; return new Promise(resolve => { resolveOpen = resolve; }); };
+    button.click(); await wait(50); button.click();
+    const pending = button.disabled && count === 1;
+    resolveOpen(true); await wait(50);
+    const success = !button.disabled && button.parentElement.textContent.includes('Launch requested');
+    window.ytClipper.openKawaikara = async () => { throw new Error('not installed'); };
+    button.click(); await wait(50);
+    const failure = !button.disabled && button.parentElement.textContent.includes('Could not open Kawaikara');
+    return { pending, success, failure };
+  })()`);
+  for (const [name, value] of Object.entries(result)) assert.equal(value, true, name);
+  console.log('Integration settings: pending protection, launch guidance and error retry passed');
+  win.destroy(); server.close(); clearTimeout(deadline); app.exit(0);
+}).catch(error => { console.error(error); server.close(); app.exit(1); });

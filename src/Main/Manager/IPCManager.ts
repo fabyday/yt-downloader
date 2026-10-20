@@ -1,3 +1,4 @@
+import type { DevelopmentConnection } from "../DevelopmentConnection";
 import { app, dialog, ipcMain, shell, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import * as fs from "node:fs/promises";
@@ -41,6 +42,8 @@ const IPC_CHANNELS = [
   "app:get-info",
   "app:check-updates",
   "app:open-external",
+  "app:open-kawaikara",
+  "app:development-connection",
   "dialog:select-output-dir",
   "download:open-output",
   "download:cancel",
@@ -74,6 +77,7 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     private readonly preferenceManager: PreferenceManager,
     private readonly updateManager: UpdateManager,
     private readonly companionManager: CompanionManager,
+    private readonly developmentConnection?: DevelopmentConnection,
   ) {
     super();
   }
@@ -120,12 +124,21 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     );
   }
 
+  /** Transfers approved optional credentials to the private Worker, never to Renderer or durable settings. */
+  private async prepareCompanion(requestId: string | undefined, sourceUrl: string): Promise<void> {
+    if (!requestId) return;
+    const cookies = await this.companionManager.requestCookies(requestId, sourceUrl);
+    await this.workerManager.getClient().request('companion.prepare', { requestId, sourceUrl, cookies });
+  }
+
   private registerHandlers(): void {
-    ipcMain.handle("preview:resolve", async (_event, videoId: unknown) => {
+    ipcMain.handle("preview:resolve", async (event, videoId: unknown) => {
       const source = previewSource(videoId);
       if (!source) return { ok: false, error: "preview.failed" };
       await this.cookieOperations;
-      return this.workerManager.getClient().request("preview.resolve", { videoId: source.key }, YT_DLP_UPDATE_TIMEOUT_MS + 90_000);
+      const companionRequestId = this.windowManager.companionRequestFor(event.sender.id, source.url);
+      await this.prepareCompanion(companionRequestId, source.url);
+      return this.workerManager.getClient().request("preview.resolve", { videoId: source.key, companionRequestId }, YT_DLP_UPDATE_TIMEOUT_MS + 90_000);
     });
     let accessRequest: Promise<void> | null = null;
     ipcMain.handle("cookies:request-access", async (_event, options: BrowserCookieOptions) => {
@@ -233,6 +246,34 @@ export class IPCManager extends BaseManager<IpcReturnType> {
       },
     );
 
+    ipcMain.handle("app:development-connection", async (event, operation: unknown, hostId: unknown) => {
+      if (event.senderFrame !== event.sender.mainFrame || !this.windowManager.ownsRenderer(event.sender.id))
+        throw new Error("Untrusted connection sender.");
+      if (!this.developmentConnection) return { development: false, state: "disconnected" };
+      if (operation === "automatic") {
+        if (hostId !== "true" && hostId !== "false") throw new Error("Invalid automatic connection preference.");
+        return this.developmentConnection.setAutomatic(hostId === "true");
+      }
+      if (operation === "status") return this.developmentConnection.status();
+      if (operation === "disconnect") return this.developmentConnection.disconnect();
+      if (operation !== "connect" || (hostId !== undefined && (typeof hostId !== "string" || !/^[a-f0-9-]{36}$/.test(hostId))))
+        throw new Error("Invalid connection operation.");
+      return this.developmentConnection.connect(hostId as string | undefined);
+    });
+    ipcMain.handle("app:open-kawaikara", async (event) => {
+      if (event.senderFrame !== event.sender.mainFrame || !this.windowManager.ownsRenderer(event.sender.id))
+        throw new Error("Untrusted connection sender.");
+      // Development never wakes an installed production host as a fallback.
+      if (this.developmentConnection) return (await this.developmentConnection.connect()).state === "connected";
+      try {
+        // Fixed, supported wake route only: opening the host grants no permissions.
+        await shell.openExternal("kawaikara://bridge/wake");
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
     ipcMain.handle("dialog:select-output-dir", async (_event, localeValue) => {
       const locale = normalizeLocale(localeValue || app.getLocale());
       const result = await dialog.showOpenDialog({
@@ -265,13 +306,19 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     );
     ipcMain.handle(
       "queue:enqueue",
-      (event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
-        this.workerManager.getClient().request("queue.enqueue", { item: this.windowManager.bindCompanionRequest(event.sender.id, item) }),
+      async (event: IpcMainInvokeEvent, item: DownloadQueueItem) => {
+        const bound = this.windowManager.bindCompanionRequest(event.sender.id, item);
+        await this.prepareCompanion(bound.companionRequestId, bound.payload.url);
+        return this.workerManager.getClient().request("queue.enqueue", { item: bound });
+      },
     );
     ipcMain.handle(
       "queue:update",
-      (event: IpcMainInvokeEvent, item: DownloadQueueItem) =>
-        this.workerManager.getClient().request("queue.update", { item: this.windowManager.bindCompanionRequest(event.sender.id, item) }),
+      async (event: IpcMainInvokeEvent, item: DownloadQueueItem) => {
+        const bound = this.windowManager.bindCompanionRequest(event.sender.id, item);
+        await this.prepareCompanion(bound.companionRequestId, bound.payload.url);
+        return this.workerManager.getClient().request("queue.update", { item: bound });
+      },
     );
     ipcMain.handle(
       "queue:remove",

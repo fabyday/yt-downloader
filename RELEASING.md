@@ -11,5 +11,5 @@ release must contain `release-manifest.json` and every artifact referenced by it
 
 Kawaikara requires HTTPS artifact URLs and a SHA-256 value for every artifact.
 macOS installation accepts DMG or ZIP files and checks that the installed bundle
-identifier is `com.ytdownloader.app` before removing quarantine from the staged
+identifier is `day.faby.kawai-downloader` before removing quarantine from the staged
 application.

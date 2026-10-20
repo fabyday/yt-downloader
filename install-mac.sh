@@ -139,7 +139,7 @@ main() {
   [[ -d "$staged_app" && ! -L "$staged_app" && -f "$plist" && ! -L "$plist" ]] || fail 'Missing application bundle.'
   local identifier executable app_version
   identifier="$(json_value "$plist" CFBundleIdentifier)" || fail 'Missing bundle identifier.'
-  [[ "$identifier" == com.ytdownloader.app || "$identifier" == day.faby.kawaidownloader ]] || fail 'Unexpected bundle identifier.'
+  [[ "$identifier" == day.faby.kawai-downloader ]] || fail 'Unexpected bundle identifier.'
   app_version="$(json_value "$plist" CFBundleShortVersionString)" || fail 'Missing app version.'
   [[ "$app_version" == "$version" ]] || fail 'Application and release versions differ.'
   executable="$(json_value "$plist" CFBundleExecutable)" || fail 'Missing app executable.'

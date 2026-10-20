@@ -31,6 +31,7 @@ interface ManagedTab {
   title: string;
   sourceKey?: string;
   companionRequestId?: string;
+  resetting?: boolean;
   view: WebContentsView;
 }
 
@@ -210,11 +211,32 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     return this.getTabSnapshot();
   }
 
-  closeTab(tabId: string): BrowserTabSnapshot {
+  async closeTab(tabId: string): Promise<BrowserTabSnapshot> {
     const tabOrder = [...this.tabs.keys()];
     const closingIndex = tabOrder.indexOf(tabId);
     const tab = this.tabs.get(tabId);
     if (!tab || closingIndex < 0) return this.getTabSnapshot();
+
+    if (this.tabs.size === 1) {
+      if (tab.resetting || tab.view.webContents.isDestroyed()) return this.getTabSnapshot();
+      tab.resetting = true;
+      try {
+        // Include typed but not yet loaded URLs. Do not reload an untouched editor.
+        const hasInput = await tab.view.webContents.executeJavaScript(
+          `Boolean(document.querySelector('#urlInput')?.value?.trim())`,
+        );
+        if (this.tabs.get(tabId) !== tab) return this.getTabSnapshot();
+        if (!tab.sourceKey && !hasInput) return this.getTabSnapshot();
+        await tab.view.webContents.loadURL(this.createRendererUrl("editor", { tabId }));
+        tab.sourceKey = undefined;
+        tab.companionRequestId = undefined;
+        tab.title = "Video 1";
+        this.emitTabsChanged();
+        return this.getTabSnapshot();
+      } finally {
+        tab.resetting = false;
+      }
+    }
 
     const wasActive = this.activeTabId === tabId;
     this.tabs.delete(tabId);
@@ -256,6 +278,23 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       this.emitTabsChanged();
     }
     return this.getTabSnapshot();
+  }
+
+  /** Allows connection settings IPC only from a known local application Renderer. */
+  ownsRenderer(webContentsId: number): boolean {
+    const targets = [this.mainWindow?.webContents, this.queueWindow?.webContents,
+      ...[...this.tabs.values()].map(tab => tab.view.webContents)];
+    return targets.some(contents => {
+      if (!contents || contents.isDestroyed() || contents.id !== webContentsId) return false;
+      try { return new URL(contents.getURL()).origin === new URL(this.rendererUrl).origin; }
+      catch { return false; }
+    });
+  }
+
+  /** Returns a request only when the sender's tab still owns the original source. */
+  companionRequestFor(webContentsId: number, sourceUrl: string): string | undefined {
+    const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents.id === webContentsId);
+    return tab && parseVideoSource(sourceUrl)?.key === tab.sourceKey ? tab.companionRequestId : undefined;
   }
 
   bindCompanionRequest(webContentsId: number, item: DownloadQueueItem): DownloadQueueItem {

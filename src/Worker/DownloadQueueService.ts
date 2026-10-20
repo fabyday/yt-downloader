@@ -15,6 +15,7 @@ interface DownloadQueueServiceOptions {
   execute: (
     request: DownloadRequest,
     onProgress: (progress: DownloadProgress) => void,
+    companionRequestId?: string,
   ) => Promise<DownloadResult>;
   load: () => Promise<string | null>;
   notify: (items: DownloadQueueItem[]) => void;
@@ -203,6 +204,7 @@ export class DownloadQueueService {
               keepSourceCache: true,
             },
             (progress) => this.handleProgress(item.id, progress),
+            item.companionRequestId,
           );
 
           if (this.pauseRequested.has(item.id)) {

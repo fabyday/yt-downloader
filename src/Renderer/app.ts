@@ -414,7 +414,7 @@ function bindEvents() {
   elements.timelineInteractionArea.addEventListener("pointerdown", beginTimelineAreaDrag);
   elements.timelineInteractionArea.addEventListener("pointermove", event => {
     if (state.timelineInteraction !== null) return;
-    elements.timelineInteractionArea.dataset.hoverHandle = timelineHandleAt(event.clientX) ?? "";
+    elements.timelineInteractionArea.dataset.hoverHandle = timelineHandleAt(event.clientX, event.clientY) ?? "";
   });
   elements.timelineInteractionArea.addEventListener("pointerleave", () => {
     delete elements.timelineInteractionArea.dataset.hoverHandle;
@@ -1387,18 +1387,24 @@ function beginTimelinePositionDrag(event: PointerEvent): void {
 
 let lastTimelineHandle: TimelineHandle | null = null;
 
-function timelineHandleAt(clientX: number): TimelineHandle | null {
+function timelineHandleAt(clientX: number, clientY: number): TimelineHandle | null {
   if (!state.playerReady || state.duration <= 0) return null;
   const rect = elements.timelineInput.getBoundingClientRect();
   const candidates: { kind: TimelineHandle; x: number }[] = [];
   for (const [kind, time] of [["start", state.startTime], ["end", state.endTime], ["playhead", getDisplayedTimelineTime()]] as const) {
+    // A selector owns only its visible bracket row, not the entire vertical
+    // column. Above/below it the red line remains a playhead drag target.
+    if (kind !== "playhead") {
+      const marker = (kind === "start" ? elements.startMarkerHandle : elements.endMarkerHandle).getBoundingClientRect();
+      if (clientY < marker.top || clientY > marker.bottom) continue;
+    }
     if (time !== null && isTimelineTimeVisible(time)) candidates.push({ kind, x: rect.left + rect.width * getTimelinePercent(time) / 100 });
   }
   return nearestTimelineHandle(clientX, candidates, lastTimelineHandle);
 }
 
 function beginTimelineAreaDrag(event: PointerEvent): void {
-  const handle = timelineHandleAt(event.clientX);
+  const handle = timelineHandleAt(event.clientX, event.clientY);
   if (handle === "start" || handle === "end") beginMarkerDrag(event, handle, true);
   else {
     lastTimelineHandle = "playhead";

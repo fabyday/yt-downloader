@@ -2,7 +2,7 @@ import { app } from "electron";
 import * as path from "node:path";
 import {
   findDownloaderDeepLink,
-  YT_DOWNLOADER_PROTOCOL,
+  DOWNLOADER_PROTOCOLS,
 } from "./ExternalProtocol";
 import { ApplicationManager } from "./Manager/ApplicationManager";
 import { readHardwareAccelerationPreference } from "./HardwareAcceleration";
@@ -41,11 +41,13 @@ if (!hasSingleInstanceLock) {
 }
 
 function registerProtocolClient(): void {
-  if (process.defaultApp && process.argv[1]) {
-    app.setAsDefaultProtocolClient(YT_DOWNLOADER_PROTOCOL, process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
-    return;
+  for (const protocol of DOWNLOADER_PROTOCOLS) {
+    if (process.defaultApp && process.argv[1]) {
+      app.setAsDefaultProtocolClient(protocol, process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    } else {
+      app.setAsDefaultProtocolClient(protocol);
+    }
   }
-  app.setAsDefaultProtocolClient(YT_DOWNLOADER_PROTOCOL);
 }
