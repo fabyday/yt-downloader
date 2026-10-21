@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Validate package version against all tags and releases
+      - name: Validate version against published releases (allow draft rebuilds)
         id: version
         run: node ci/scripts/release.cjs validate
         env:
@@ -102,6 +102,8 @@ jobs:
             dist/${{ matrix.platform }}-${{ matrix.arch }}/*.dmg
             dist/${{ matrix.platform }}-${{ matrix.arch }}/*.zip
             dist/${{ matrix.platform }}-${{ matrix.arch }}/release-manifest.json
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/kawaikara.manifest.json
+            dist/${{ matrix.platform }}-${{ matrix.arch }}/kawai-downloader-icon.png
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -124,7 +126,7 @@ jobs:
           pattern: kawai-downloader-*
           path: release-assets
           merge-multiple: false
-      - name: Create version tag and draft release with installers
+      - name: Upload, verify and replace same-version draft
         run: node scripts/release.cjs publish
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}

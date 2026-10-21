@@ -36,7 +36,7 @@ The downloader stores its identity, pinned host and automatic discovery preferen
 remains separate from this transport.
 
 Either side writes a private, immutable, binding-scoped revocation under
-`~/.kawaikara/development-connections/revocations/` before clearing a connection.
+`<Kawaikara checkout>/tmp/kawaikara Dev/development-connections/revocations/` before clearing a connection.
 The other app checks this on startup even when the initiating app is no longer running.
 The downloader clears the host, rotates credentials and suppresses automatic re-registration;
 a manual reconnect receives new consent. Old revocations cannot invalidate new credentials.
@@ -53,3 +53,137 @@ The Main process reads and normalizes it at startup, announces a SHA-256 digest,
 and sends PNG bytes only when the authenticated host requests a cache update.
 Missing icons explicitly clear the host cache; unreadable/invalid assets do not
 prevent connecting. Presentation changes never alter permission grants.
+
+## Public installation descriptor
+
+Release packaging now emits `kawaikara.manifest.json` and
+`kawai-downloader-icon.png` alongside `release-manifest.json`. The release job
+combines the OS/CPU artifacts, verifies a complete replacement Draft, and then
+removes the previous same-version Draft. Publication remains the release owner's
+explicit action.
+
+The descriptor contains the stable app ID/name, version-pinned public icon URL,
+OS/architecture variants, artifact URLs with SHA-256, installation guide, and
+advisory connection protocol metadata. Kawaikara can read its HTTPS URL before
+the downloader is installed. Images and documents are cached as presentation,
+never permission grants. There is no Linux target until a Linux release exists.
+
+The application still connects using the existing authenticated handshake and
+permission approval. Reading this document or opening an installer does not pair
+the apps. `launchScheme` describes the actual registered `kawai-downloader`
+scheme; it does not authorize the reader to execute arbitrary commands.
+
+## Version 1 and mixed local testing
+
+The public installation descriptor, companion descriptor and connection protocol remain
+version **1**. The product's existing `package.json` version remains unchanged until a
+release actually requires a new product version; CI never increments it automatically.
+
+| Kawaikara host | Downloader | Run |
+| --- | --- | --- |
+| Packaged | Packaged, installed | Normal OS launch / `kawai-downloader://open` handoff |
+| Development | Packaged, installed | In Kawaikara: `KAWAIKARA_EXTERNAL_APP_MODE=installed pnpm start` |
+| Development | Development | In Kawaikara: `KAWAIKARA_EXTERNAL_APP_MODE=development pnpm start`; here: `pnpm start` |
+
+Installed-mode tests use the normal callback/resource-permission boundary; development
+pairing records are not reused. In development mode both processes must be running.
+Changing Kawaikara's mode requires restarting it. Install the packaged downloader in a
+standard location recognized by Kawaikara's native adapter before testing native launch.
+
+To test a local installer before publishing, build it here (`pnpm build:mac:arm64`,
+`pnpm build:mac:x64`, `pnpm build:win:x64`, or `pnpm build:win:arm64`). Then run
+Kawaikara's `scripts/serve-external-app-fixture.cjs` with `--artifact` pointing to the
+resulting DMG/Setup EXE and optional `--icon` pointing to this repository's
+`resources/app-icon.png`. It computes SHA-256 and serves a v1 manifest and the selected
+files on an explicit loopback port. Set this variable when starting either a packaged or
+development Kawaikara host:
+
+```sh
+KAWAIKARA_EXTERNAL_APP_TEST_MANIFEST='day.faby.kawai-downloader=http://127.0.0.1:8765/kawaikara.manifest.json'
+```
+
+The Provider's public manifest source is replaced for this app only for that process.
+A Draft on GitHub is not a public installation source; use the local fixture while the
+release is unpublished. Installation does not itself register or grant permissions.
+
+## Rebuilding an unpublished Draft
+
+The manual Build workflow permits the same product version while its release remains a
+Draft. Published versions and standalone tags without a corresponding Draft still block
+same/lower versions. Draft-only versions do not force a version bump.
+
+After all four OS/CPU builds succeed, the release job:
+
+1. Uploads eight installers, both manifests, and the product icon to a staging Draft.
+2. Checks the complete asset set, sizes and GitHub-provided SHA-256 digests when present.
+3. Rechecks that the existing same-version Draft was not published or edited meanwhile.
+4. Temporarily renames the previous Draft, pins the canonical lightweight tag to the exact
+   new build commit, and promotes the complete staging Draft to that version.
+5. Removes the previous Draft only after promotion is confirmed. Other versions' Drafts
+   and published releases remain untouched. Existing release notes are preserved.
+
+No release is published automatically. Upload/verification failures leave the old Draft
+and tag intact. A promotion failure attempts to restore them. GitHub writes are not a
+transaction: if a rollback or old-Draft deletion fails, CI fails and retains recoverable
+Drafts under `kawai-build-*` / `kawai-backup-*`; inspect those before manual cleanup.
+Never delete the complete canonical Draft to resolve a cleanup failure. The workflow's
+repository-wide concurrency group serializes its own release runs.
+
+Implementation follows GitHub's [release API](https://docs.github.com/en/rest/releases/releases)
+and [release asset API](https://docs.github.com/en/rest/releases/assets). Tests use a stateful
+fake API, including failed uploads, concurrent publication and lost promotion responses;
+they do not create or delete real GitHub releases.
+
+### Package scripts for the local server
+
+In this repository:
+
+```sh
+pnpm dev:server:build     # Build for this machine, then start the manifest server
+# Or, after building:
+pnpm dev:server
+# A selected artifact/target/port:
+pnpm dev:server --artifact /absolute/path/app.dmg --os darwin --arch arm64 --port 8765
+pnpm dev:server --help
+```
+
+The default server selects the current OS/CPU's DMG or Setup EXE from `dist/`, and
+serves the v1 manifest and actual product icon on `127.0.0.1:8765`. Restart it after
+rebuilding so the manifest checksum matches the new bytes. It does not launch or install
+the downloader. Stop it with Ctrl+C.
+
+In the Kawaikara repository, run `pnpm dev:external:local` to use this default server
+with the installed-app transport. For a different port, set
+`KAWAIKARA_EXTERNAL_APP_TEST_MANIFEST` explicitly and use `pnpm dev:external:installed`.
+For dev-to-dev connections, use `pnpm dev:external:development` in Kawaikara and
+`pnpm start` here; no installation server is needed.
+
+
+### Repository-local development connections (Windows, macOS and Linux)
+
+Development discovery now lives in
+`<Kawaikara checkout>/tmp/kawaikara Dev/development-connections`. It is resolved
+from the host build root and omitted entirely from Stable. Separate checkouts have
+separate discovery roots. Old home-directory records are neither migrated nor
+removed; fresh approval may be needed in the new namespace.
+
+Run `pnpm dev:external:development` in Kawaikara, then in the downloader:
+
+```sh
+pnpm start:connected --kawaikara "/absolute/path/to/kawaikara-checkout"
+```
+
+This replaces the plain `pnpm start` pairing instructions above. The same command
+works in PowerShell with a Windows checkout path. The script validates the host
+package and passes an absolute connection directory to the child process without
+shell interpolation. Plain downloader `pnpm start` starts only the app when no
+connection directory is configured. For isolated fixtures, set the same absolute
+`KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY` on both processes before startup.
+
+Reserved installed-app discovery roots (generic installed discovery is not wired yet):
+
+- Windows: `%LOCALAPPDATA%\Kawaikara\connections\v1`, falling back to
+  `%USERPROFILE%\AppData\Local` when LOCALAPPDATA is absent or relative.
+- macOS: `~/Library/Application Support/Kawaikara/connections/v1`.
+- Linux: `$XDG_STATE_HOME/kawaikara/connections/v1`, falling back to
+  `~/.local/state/kawaikara/connections/v1` when XDG_STATE_HOME is absent or relative.

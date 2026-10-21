@@ -1,3 +1,4 @@
+const { writeDistributionManifest } = require('./scripts/distribution-manifest.cjs');
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -26,6 +27,7 @@ if (artifacts.length === 0) {
 const manifest = { version: packageJson.version, artifacts };
 const outputPath = path.join(distDirectory, "release-manifest.json");
 fs.writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
+writeDistributionManifest(distDirectory, manifest, repository);
 console.log(`Wrote ${outputPath} with ${artifacts.length} artifact(s).`);
 
 function createArtifact(filename) {

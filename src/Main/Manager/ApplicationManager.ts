@@ -104,11 +104,16 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
         rendererResult.data.url,
         this.companionManager,
       );
-      if (!app.isPackaged) {
+      const connectionDirectory = !app.isPackaged
+        ? process.env.KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY
+        : undefined;
+      if (connectionDirectory && !path.isAbsolute(connectionDirectory))
+        throw new Error("Kawaikara development connection directory must be absolute.");
+      if (connectionDirectory) {
         this.developmentConnection = new DevelopmentConnection(
           path.join(app.getPath("userData"), "kawaikara-development-connection.json"),
           (url) => this.openExternalUrl(url),
-          undefined,
+          connectionDirectory,
           () => readDevelopmentAppIcon(path.join(app.getAppPath(), "resources", "app-icon.png")),
         );
       }

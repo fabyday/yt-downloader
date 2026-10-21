@@ -1,3 +1,5 @@
+const { replaceDraft } = require('./draft-release.cjs');
+const { writeDistributionManifest } = require('./distribution-manifest.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -42,7 +44,16 @@ function gh(args) {
 function checkRemote(repository, version, run = gh) {
   const tags = JSON.parse(run(['api', '--paginate', '--slurp', `repos/${repository}/tags?per_page=100`])).flat();
   const releases = JSON.parse(run(['api', '--paginate', '--slurp', `repos/${repository}/releases?per_page=100`])).flat();
-  assertNewVersion(version, [...tags.map(tag => tag.name), ...releases.map(release => release.tag_name)]);
+  const published = releases.filter(release => !release.draft);
+  const publishedTags = new Set(published.map(release => release.tag_name));
+  const draftOnlyTags = new Set(releases.filter(release => release.draft && !publishedTags.has(release.tag_name)).map(release => release.tag_name));
+  assertNewVersion(version, [
+    ...tags.filter(tag => !draftOnlyTags.has(tag.name)).map(tag => tag.name),
+    ...published.map(release => release.tag_name),
+  ]);
+  const matching = releases.filter(release => release.draft && release.tag_name === `v${version}`);
+  if (matching.length > 1) throw new Error('Multiple drafts have the target version; review them before rebuilding.');
+  return { tags, releases, replacement: matching[0] };
 }
 
 async function collectAssets(directory, version, repository) {
@@ -68,12 +79,12 @@ async function collectAssets(directory, version, repository) {
 async function publishRelease(repository, version, sha, directory, run = gh) {
   if (!/^[a-f0-9]{40}$/.test(sha || '')) throw new Error('Expected exact validated commit SHA');
   const { files, manifest } = await collectAssets(directory, version, repository);
-  // Recheck immediately before writing; tag creation never overwrites an existing ref.
-  checkRemote(repository, version, run);
+  // Draft-only versions are rebuildable; published releases and unrelated tags remain protected.
+  const remote = checkRemote(repository, version, run);
   const manifestPath = path.resolve(directory, 'release-manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-  run(['api', '--method', 'POST', `repos/${repository}/git/refs`, '-f', `ref=refs/tags/v${version}`, '-f', `sha=${sha}`]);
-  return run(['release', 'create', `v${version}`, '--repo', repository, '--verify-tag', '--target', sha, '--title', `kawai-downloader v${version}`, '--draft', ...(parseVersion(version).pre.length ? ['--prerelease'] : []), '--generate-notes', ...files, manifestPath]).trim();
+  const distributionFiles = writeDistributionManifest(directory, manifest, repository);
+  return replaceDraft({ repository, version, sha, files: [...files, manifestPath, ...distributionFiles], manifest, remote, checkRemote, run, prerelease: parseVersion(version).pre.length > 0 });
 }
 
 async function main() {
@@ -90,7 +101,7 @@ async function main() {
     const version = process.env.RELEASE_VERSION, sha = process.env.RELEASE_SHA;
     const url = await publishRelease(repository, version, sha, 'release-assets');
     console.log(url);
-    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Draft release created\n\n${url}\n\nCommit: \`${sha}\`\n\nReview and publish this draft manually in GitHub Releases.\n`);
+    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Draft release prepared\n\n${url}\n\nCommit: \`${sha}\`\n\nReview and publish this draft manually in GitHub Releases.\n`);
   } else throw new Error('Usage: node scripts/release.cjs validate|publish');
 }
 

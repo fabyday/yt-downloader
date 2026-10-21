@@ -14,17 +14,11 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { parseDownloaderDeepLink } from "./ExternalProtocol";
 import type { DevelopmentConnectionStatus } from "../Shared/types";
 
 const APP_ID = "day.faby.kawai-downloader";
-const DISCOVERY_DIRECTORY = path.join(
-  homedir(),
-  ".kawaikara",
-  "development-connections",
-);
 interface Host {
   hostId: string;
   endpoint: string;
@@ -76,7 +70,7 @@ export class DevelopmentConnection {
   constructor(
     private readonly file: string,
     private readonly open: (url: string) => void,
-    private readonly directory = DISCOVERY_DIRECTORY,
+    private readonly directory: string,
     private readonly readIcon?: () => Promise<
       DevelopmentAppIcon | null | undefined
     >,
