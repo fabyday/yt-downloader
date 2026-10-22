@@ -14,7 +14,7 @@ Run commands from the repository root. The paths below describe the current scri
 pnpm install --frozen-lockfile
 ```
 
-KawaiUI is pinned to the versioned package in `vendor/`, with its integrity recorded in the lockfile. A sibling KawaiUi checkout is not required. See [UI package maintenance](../vendor/README.md) for rebuilding it.
+KawaiUI is downloaded from an immutable GitHub commit pinned in `package.json` and `pnpm-lock.yaml`. The package includes its built JavaScript, types and CSS; neither a local `vendor/` archive nor a sibling KawaiUi checkout is required. To update it, publish the library changes first, change the commit pin, and regenerate the lockfile with `pnpm install`.
 
 ## Where binaries come from
 

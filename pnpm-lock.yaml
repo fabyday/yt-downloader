@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@kawaikara/kawai-ui':
-        specifier: file:vendor/kawai-ui-0.1.2.tgz
-        version: file:vendor/kawai-ui-0.1.2.tgz(motion@13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: github:Kawaikara/KawaiUi#6ca5ede93e97b2484b9ddb207d0f3234bd910f18
+        version: https://codeload.github.com/Kawaikara/KawaiUi/tar.gz/6ca5ede93e97b2484b9ddb207d0f3234bd910f18(motion@13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       hls.js:
         specifier: ^1.7.3
         version: 1.7.3
@@ -138,8 +138,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@kawaikara/kawai-ui@file:vendor/kawai-ui-0.1.2.tgz':
-    resolution: {integrity: sha512-mHknYRe6Dok+adZYBnf60SD3jFkLkVIqVJpXHW8UBe+9kpMzs59taM3cffnNzMSN6wyPHLoE5kCrjry94PmPCg==, tarball: file:vendor/kawai-ui-0.1.2.tgz}
+  '@kawaikara/kawai-ui@https://codeload.github.com/Kawaikara/KawaiUi/tar.gz/6ca5ede93e97b2484b9ddb207d0f3234bd910f18':
+    resolution: {tarball: https://codeload.github.com/Kawaikara/KawaiUi/tar.gz/6ca5ede93e97b2484b9ddb207d0f3234bd910f18}
     version: 0.1.2
     peerDependencies:
       '@dnd-kit/react': ^0.5.0
@@ -1810,7 +1810,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@kawaikara/kawai-ui@file:vendor/kawai-ui-0.1.2.tgz(motion@13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@kawaikara/kawai-ui@https://codeload.github.com/Kawaikara/KawaiUi/tar.gz/6ca5ede93e97b2484b9ddb207d0f3234bd910f18(motion@13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       class-variance-authority: 0.7.1
       clsx: 2.1.1
