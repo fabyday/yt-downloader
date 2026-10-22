@@ -36,7 +36,7 @@ The downloader stores its identity, pinned host and automatic discovery preferen
 remains separate from this transport.
 
 Either side writes a private, immutable, binding-scoped revocation under
-`<Kawaikara checkout>/tmp/kawaikara Dev/development-connections/revocations/` before clearing a connection.
+`<Kawaikara checkout>/tmp/development-connections/revocations/` before clearing a connection.
 The other app checks this on startup even when the initiating app is no longer running.
 The downloader clears the host, rotates credentials and suppresses automatic re-registration;
 a manual reconnect receives new consent. Old revocations cannot invalidate new credentials.
@@ -152,7 +152,7 @@ serves the v1 manifest and actual product icon on `127.0.0.1:8765`. Restart it a
 rebuilding so the manifest checksum matches the new bytes. It does not launch or install
 the downloader. Stop it with Ctrl+C.
 
-In the Kawaikara repository, run `pnpm dev:external:local` to use this default server
+In the Kawaikara repository, run `pnpm dev:external:install-test` to use this default server
 with the installed-app transport. For a different port, set
 `KAWAIKARA_EXTERNAL_APP_TEST_MANIFEST` explicitly and use `pnpm dev:external:installed`.
 For dev-to-dev connections, use `pnpm dev:external:development` in Kawaikara and
@@ -162,7 +162,7 @@ For dev-to-dev connections, use `pnpm dev:external:development` in Kawaikara and
 ### Repository-local development connections (Windows, macOS and Linux)
 
 Development discovery now lives in
-`<Kawaikara checkout>/tmp/kawaikara Dev/development-connections`. It is resolved
+`<Kawaikara checkout>/tmp/development-connections`. It is resolved
 from the host build root and omitted entirely from Stable. Separate checkouts have
 separate discovery roots. Old home-directory records are neither migrated nor
 removed; fresh approval may be needed in the new namespace.
@@ -187,3 +187,10 @@ Reserved installed-app discovery roots (generic installed discovery is not wired
 - macOS: `~/Library/Application Support/Kawaikara/connections/v1`.
 - Linux: `$XDG_STATE_HOME/kawaikara/connections/v1`, falling back to
   `~/.local/state/kawaikara/connections/v1` when XDG_STATE_HOME is absent or relative.
+
+
+`dev:external:local` (alias: `dev:external:install-test`) tests distribution:
+fetch the local manifest on port 8765, download/install its artifact and use installed
+transport. This is separate from `dev:external:development`, which pairs running
+development apps. Distribution controls remain available independently of the
+connection transport when the Provider declares a manifest.

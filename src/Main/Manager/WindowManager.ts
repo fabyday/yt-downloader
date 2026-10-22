@@ -42,6 +42,7 @@ export class WindowManager extends BaseManager<WindowReturnType> {
   private queueWindow: BrowserWindow | null = null;
   private readonly tabs = new Map<string, ManagedTab>();
   private tabSequence = 0;
+  private externalRequestQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly rendererUrl: string,
@@ -166,7 +167,14 @@ export class WindowManager extends BaseManager<WindowReturnType> {
     return this.activateTab(id);
   }
 
-  openExternalUrl(value: string): boolean {
+  /** Serializes incoming requests so two arrivals cannot replace the same empty editor. */
+  openExternalUrl(value: string): Promise<boolean> {
+    const pending = this.externalRequestQueue.then(() => this.openExternalRequest(value));
+    this.externalRequestQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async openExternalRequest(value: string): Promise<boolean> {
     const request = parseDownloaderDeepLink(value);
     if (!request || !this.mainWindow || this.mainWindow.isDestroyed()) {
       return false;
@@ -178,7 +186,28 @@ export class WindowManager extends BaseManager<WindowReturnType> {
       existing.companionRequestId = request.companion?.requestId;
       this.activateTab(existing.id);
     } else {
-      this.createTab(request.sourceUrl, request.companion?.requestId);
+      // Reuse the first (default) editor only when it has no source or draft URL.
+      // An unreadable/loading editor is conservatively treated as occupied.
+      const first = this.tabs.values().next().value as ManagedTab | undefined;
+      let empty = false;
+      if (first && !first.sourceKey && !first.resetting && !first.view.webContents.isDestroyed()) {
+        empty = await first.view.webContents.executeJavaScript(
+          `Boolean(document.querySelector('#urlInput')) && !document.querySelector('#urlInput').value.trim()`,
+        ).catch(() => false);
+      }
+      if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
+      if (empty && first && this.tabs.get(first.id) === first && !first.sourceKey && !first.resetting && !first.view.webContents.isDestroyed()) {
+        first.sourceKey = key;
+        first.companionRequestId = request.companion?.requestId;
+        await first.view.webContents.loadURL(this.createRendererUrl("editor", {
+          tabId: first.id,
+          sourceUrl: request.sourceUrl,
+          ...(request.companion ? { companionRequestId: request.companion.requestId } : {}),
+        }));
+        this.activateTab(first.id);
+      } else {
+        this.createTab(request.sourceUrl, request.companion?.requestId);
+      }
     }
     this.focusMainWindow();
     return true;

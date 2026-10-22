@@ -9,7 +9,7 @@ function connectionDirectory(checkout) {
   const root = path.resolve(checkout);
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   if (manifest.name !== 'kawaikara') throw new Error('Select the Kawaikara checkout containing package.json.');
-  return path.join(root, 'tmp', 'kawaikara Dev', 'development-connections');
+  return path.join(root, 'tmp', 'development-connections');
 }
 module.exports = { connectionDirectory };
 if (require.main === module) {

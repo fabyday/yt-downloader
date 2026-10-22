@@ -65,7 +65,7 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
     isDestroyed() { return false; }
     setWindowOpenHandler() {}
     loadURL(url) { this.url = url; this.loads = (this.loads || 0) + 1; this.hasInput = false; return Promise.resolve(); }
-    executeJavaScript() { return Promise.resolve(!!this.hasInput); }
+    executeJavaScript(code) { return Promise.resolve(code.includes("&& !") ? !this.hasInput : !!this.hasInput); }
     send() {}
     focus() { this.focused=true; }
     close() {}
@@ -134,28 +134,28 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
     return link.href;
   };
   windows[0].minimized=true;
-  assert.equal(manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4')),true);
+  assert.equal(await manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4')),true);
   const first=manager.getTabSnapshot();
-  assert.equal(first.tabs.length,3);
-  assert.equal(first.activeTabId,first.tabs.at(-1).id);
+  assert.equal(first.tabs.length,2);
+  assert.equal(first.activeTabId,first.tabs[0].id);
   assert.ok(windows[0].restored&&windows[0].shown&&windows[0].focused);
-  assert.equal(views.at(-1).webContents.focused,true);
-  manager.openExternalUrl(external('https://www.youtube.com/watch?v=woyNiKxoDS4&t=12','request-0002'));
-  assert.equal(manager.getTabSnapshot().tabs.length,3,'same video with another URL reuses its tab');
+  assert.equal(views[0].webContents.focused,true);
+  await manager.openExternalUrl(external('https://www.youtube.com/watch?v=woyNiKxoDS4&t=12','request-0002'));
+  assert.equal(manager.getTabSnapshot().tabs.length,2,'same video with another URL reuses its tab');
   assert.equal(manager.getTabSnapshot().activeTabId,first.activeTabId);
-  const contents=views.at(-1).webContents;
+  const contents=views[0].webContents;
   const item={payload:{url:'https://youtu.be/woyNiKxoDS4'},companionRequestId:'request-0001'};
   assert.equal(manager.bindCompanionRequest(contents.id,item).companionRequestId,'request-0002');
   manager.updateTabTitle(contents.id,'Manually replaced','ip7NSleQ8_U');
   assert.equal(manager.bindCompanionRequest(contents.id,item).companionRequestId,undefined);
-  manager.openExternalUrl(external('https://youtu.be/ip7NSleQ8_U'));
-  assert.equal(manager.getTabSnapshot().tabs.length,3,'manual source changes update the identity');
-  manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4'));
-  assert.equal(manager.getTabSnapshot().tabs.length,4,'old source gets a new tab after replacement');
-  for(let i=0;i<12;i++) manager.openExternalUrl(external('https://chzzk.naver.com/video/'+(100+i)));
-  assert.equal(manager.getTabSnapshot().tabs.length,16,'external requests do not disappear at the former 12-tab limit');
+  await manager.openExternalUrl(external('https://youtu.be/ip7NSleQ8_U'));
+  assert.equal(manager.getTabSnapshot().tabs.length,2,'manual source changes update the identity');
+  await manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4'));
+  assert.equal(manager.getTabSnapshot().tabs.length,3,'old source gets a new tab after replacement');
+  for(let i=0;i<12;i++) await manager.openExternalUrl(external('https://chzzk.naver.com/video/'+(100+i)));
+  assert.equal(manager.getTabSnapshot().tabs.length,15,'external requests do not disappear at the former 12-tab limit');
   assert.equal(manager.getTabSnapshot().activeTabId,manager.getTabSnapshot().tabs.at(-1).id);
-  assert.equal(manager.openExternalUrl('https://example.com'),false);
+  assert.equal(await manager.openExternalUrl('https://example.com'),false);
   for (const tab of manager.getTabSnapshot().tabs.slice(0, -1)) await manager.closeTab(tab.id);
   const last = manager.getTabSnapshot().tabs[0];
   const lastView = views.at(-1);
@@ -172,8 +172,17 @@ test('main and queue remove menus, and editor views stay below both chrome rows 
   assert.equal(lastView.webContents.loads, loads + 1, 'blank last tab must not reload');
   assert.equal(manager.getTabSnapshot().tabs[0].title, 'Video 1');
   lastView.webContents.hasInput = true;
+  await manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4'));
+  assert.equal(manager.getTabSnapshot().tabs.length, 2, 'typed draft URL must not be replaced');
+  await manager.closeTab(manager.getTabSnapshot().tabs.at(-1).id);
   await manager.closeTab(last.id);
   assert.equal(lastView.webContents.loads, loads + 2, 'typed but unloaded URLs also reset');
-  assert.equal(views.length, viewCount);
+  assert.equal(views.length, viewCount + 1);
+  await Promise.all([
+    manager.openExternalUrl(external('https://youtu.be/woyNiKxoDS4')),
+    manager.openExternalUrl(external('https://youtu.be/ip7NSleQ8_U')),
+  ]);
+  assert.equal(manager.getTabSnapshot().tabs.length, 2, 'concurrent requests reuse blank default only once');
+  assert.equal(new URL(lastView.webContents.url).searchParams.get('sourceUrl'), 'https://youtu.be/woyNiKxoDS4');
   await manager.finalize();
 });

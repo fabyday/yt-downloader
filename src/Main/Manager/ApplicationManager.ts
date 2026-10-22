@@ -45,7 +45,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
 
   openExternalUrl(value: string): void {
     if (this.windowManager && this.initialized) {
-      this.windowManager.openExternalUrl(value);
+      void this.windowManager.openExternalUrl(value).catch(error => console.error("External request could not be opened:", error instanceof Error ? error.message : "Unknown error"));
       return;
     }
     this.pendingExternalUrls.push(value);
@@ -148,7 +148,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
       }
 
       for (const value of this.pendingExternalUrls.splice(0)) {
-        this.windowManager.openExternalUrl(value);
+        void this.windowManager.openExternalUrl(value).catch(error => console.error("External request could not be opened:", error instanceof Error ? error.message : "Unknown error"));
       }
 
       this.initialized = true;

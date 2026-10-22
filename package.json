@@ -32,6 +32,7 @@
     "start": "pnpm run dev",
     "start:connected": "node scripts/start-connected.cjs",
     "dev:server": "node scripts/serve-distribution.cjs",
+    "distribution:serve": "node scripts/serve-distribution.cjs",
     "dev:server:build": "pnpm build && pnpm dev:server",
     "test:dev-server": "node --test tests/distribution-server.test.cjs",
     "watch": "pnpm run kawai-ui:check && webpack --config src/Main/webpack.dev.ts src/Preload/webpack.dev.ts src/Renderer/webpack.dev.ts src/Worker/webpack.dev.ts --watch",

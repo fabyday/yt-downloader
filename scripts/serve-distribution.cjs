@@ -14,8 +14,10 @@ Serves a v1 installation manifest, product icon and one local installer on 127.0
 Default artifact: dist/<os>-<arch>/kawai-downloader-${pkg.version}-mac-<arch>.dmg
                   or kawai-downloader-${pkg.version}-win-<arch>-Setup.exe
 Build first with pnpm build, or use pnpm dev:server:build.
-In Kawaikara, run pnpm dev:external:local (default port 8765).
-For dev-to-dev handshake testing, run pnpm start here; no installer server is needed.`;
+For installed-app testing, run pnpm dev:external:install-test in Kawaikara (port 8765).
+This server does not start a development app or change the connection mode.
+For development connections: pnpm start:connected --kawaikara /path/to/kawaikara-checkout
+Then run pnpm dev:external:development in Kawaikara; no installer server is needed.`;
 
 /** Resolves a native target without serving the checkout or arbitrary requested paths. */
 function resolveOptions(options = {}) {
@@ -140,7 +142,8 @@ async function main() {
       `Manifest server: http://127.0.0.1:${target.port}/kawaikara.manifest.json`,
     );
     console.log(`Installer: ${target.artifact}`);
-    if (target.port === 8765) console.log("Kawaikara: pnpm dev:external:local");
+    console.log("Distribution server only; no development app is started. For development pairing use pnpm start:connected --kawaikara /path/to/kawaikara-checkout.");
+    if (target.port === 8765) console.log("Installed-app test only: Kawaikara pnpm dev:external:install-test");
     else
       console.log(
         `Kawaikara: set KAWAIKARA_EXTERNAL_APP_TEST_MANIFEST=${manifest.id}=http://127.0.0.1:${target.port}/kawaikara.manifest.json, then run pnpm dev:external:installed`,
