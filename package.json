@@ -1,6 +1,6 @@
 {
   "name": "yt-section-downloader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Electron app for previewing videos supported by yt-dlp and downloading selected clips.",
   "main": "build/main/main.js",
   "type": "commonjs",
