@@ -1,4 +1,4 @@
-import type { DevelopmentConnection } from "../DevelopmentConnection";
+import type { KawaikaraConnection } from "../KawaikaraConnection";
 import { app, dialog, ipcMain, shell, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import * as fs from "node:fs/promises";
@@ -77,9 +77,20 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     private readonly preferenceManager: PreferenceManager,
     private readonly updateManager: UpdateManager,
     private readonly companionManager: CompanionManager,
-    private readonly developmentConnection?: DevelopmentConnection,
+    private readonly developmentConnection?: KawaikaraConnection,
   ) {
     super();
+  }
+
+  /** The native picker supplies the checkout; Renderer never supplies an executable or launch URI. */
+  private async selectKawaikaraCheckout() {
+    if (!this.developmentConnection) throw new Error("Kawaikara connection is unavailable.");
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory"],
+      title: t(normalizeLocale(app.getLocale()), "integration.dev.selectDirectory"),
+    });
+    if (result.canceled || !result.filePaths[0]) return this.developmentConnection.status();
+    return this.developmentConnection.selectCheckout(result.filePaths[0]);
   }
 
   async initialize(): Promise<ReturnCode<IpcReturnType>> {
@@ -250,6 +261,10 @@ export class IPCManager extends BaseManager<IpcReturnType> {
       if (event.senderFrame !== event.sender.mainFrame || !this.windowManager.ownsRenderer(event.sender.id))
         throw new Error("Untrusted connection sender.");
       if (!this.developmentConnection) return { development: false, state: "disconnected" };
+      if (operation === "selectDirectory") return this.selectKawaikaraCheckout();
+      if (operation === "installed") return this.developmentConnection.useInstalled();
+      if (operation === "connect" && this.developmentConnection.status().requiresDirectory)
+        return this.selectKawaikaraCheckout();
       if (operation === "automatic") {
         if (hostId !== "true" && hostId !== "false") throw new Error("Invalid automatic connection preference.");
         return this.developmentConnection.setAutomatic(hostId === "true");
@@ -263,15 +278,10 @@ export class IPCManager extends BaseManager<IpcReturnType> {
     ipcMain.handle("app:open-kawaikara", async (event) => {
       if (event.senderFrame !== event.sender.mainFrame || !this.windowManager.ownsRenderer(event.sender.id))
         throw new Error("Untrusted connection sender.");
-      // Development never wakes an installed production host as a fallback.
-      if (this.developmentConnection) return (await this.developmentConnection.connect()).state === "connected";
-      try {
-        // Fixed, supported wake route only: opening the host grants no permissions.
-        await shell.openExternal("kawaikara://bridge/wake");
-        return true;
-      } catch {
-        return false;
-      }
+      if (!this.developmentConnection) return false;
+      if (this.developmentConnection.status().requiresDirectory)
+        return (await this.selectKawaikaraCheckout()).state === "connected";
+      return this.developmentConnection.open();
     });
 
     ipcMain.handle("dialog:select-output-dir", async (_event, localeValue) => {

@@ -19,7 +19,9 @@ been verified on Windows or macOS.
 ## Connecting development apps
 
 1. Run both development apps (for example, `pnpm start` in each checkout).
-2. Automatic connection is on by default. When exactly one eligible host is running,
+2. In downloader preferences choose **Select Kawaikara DEV folder**, then select the
+   host checkout containing `package.json`. This target is remembered across restarts.
+   Automatic connection is on by default. When exactly one eligible host is running,
    the app requests connection and Kawaikara displays the normal permission prompt.
 3. Alternatively, choose **Connect manually** in either app. Kawaikara lists running
    compatible apps; the downloader asks for a host when several are available.
@@ -32,8 +34,11 @@ are not retried automatically; a new manual request is required.
 
 Development connections never launch installed apps or run shell startup commands.
 The downloader stores its identity, pinned host and automatic discovery preference in
-`kawaikara-development-connection.json` under its user-data directory. Production pairing
-remains separate from this transport.
+`kawaikara-development-<directory-sha256>.json` under its user-data directory.
+`kawaikara-connection-target.json` remembers the chosen target. Each checkout has
+separate credentials; switching targets revokes the previous pairing. Existing legacy
+identities are not automatically migrated, so first use requires fresh approval.
+Production pairing remains separate from this transport.
 
 Either side writes a private, immutable, binding-scoped revocation under
 `<Kawaikara checkout>/tmp/development-connections/revocations/` before clearing a connection.
@@ -173,11 +178,22 @@ Run `pnpm dev:external:development` in Kawaikara, then in the downloader:
 pnpm start:connected --kawaikara "/absolute/path/to/kawaikara-checkout"
 ```
 
-This replaces the plain `pnpm start` pairing instructions above. The same command
-works in PowerShell with a Windows checkout path. The script validates the host
+This selects the target at launch instead of choosing it in preferences. The same
+command works in PowerShell with a Windows checkout path. The script validates the host
 package and passes an absolute connection directory to the child process without
-shell interpolation. Plain downloader `pnpm start` starts only the app when no
-connection directory is configured. For isolated fixtures, set the same absolute
+shell interpolation. An explicit environment target overrides the remembered choice
+for that run. Plain downloader `pnpm start` uses the remembered target or asks for a
+DEV checkout; it never silently opens the installed Nightly when DEV is unavailable.
+Choose **Use installed Kawaikara** explicitly to use the OS protocol handler. That
+handler selects whichever installed channel owns the protocol, not a DEV checkout.
+DEV target selection and connection controls are visible only in an unpackaged
+development run (`app.isPackaged === false`), matching the existing developer UI.
+A packaged downloader can still use an explicit
+`KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY` environment override for mixed-build
+testing; its normal preferences do not expose these developer controls.
+Both apps must already be running for DEV discovery.
+
+For isolated fixtures, set the same absolute
 `KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY` on both processes before startup.
 
 Reserved installed-app discovery roots (generic installed discovery is not wired yet):
@@ -194,3 +210,6 @@ fetch the local manifest on port 8765, download/install its artifact and use ins
 transport. This is separate from `dev:external:development`, which pairs running
 development apps. Distribution controls remain available independently of the
 connection transport when the Provider declares a manifest.
+
+Run `pnpm test:connection` to verify target persistence, explicit installed-mode
+selection, per-checkout identity isolation and offline DEV behavior.

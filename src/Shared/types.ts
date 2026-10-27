@@ -206,7 +206,7 @@ export interface YtClipperApi {
   checkForUpdates(): Promise<AppUpdateInfo>;
   openExternalUrl(url: string): Promise<boolean>;
   openKawaikara(): Promise<boolean>;
-  developmentConnection(operation: "status" | "connect" | "disconnect" | "automatic", hostId?: string): Promise<DevelopmentConnectionStatus>;
+  developmentConnection(operation: "status" | "connect" | "disconnect" | "automatic" | "selectDirectory" | "installed", hostId?: string): Promise<DevelopmentConnectionStatus>;
   getPreferences(): Promise<AppPreferences>;
   updatePreferences(preferences: Partial<AppPreferences>): Promise<AppPreferences>;
   onBrowserTabsChanged(handler: (snapshot: BrowserTabSnapshot) => void): () => void;
@@ -216,6 +216,9 @@ export interface YtClipperApi {
 
 /** Public development connection state; authentication material is Main-only. */
 export interface DevelopmentConnectionStatus {
+  /** Explicit DEV rendezvous target; never a pairing token or endpoint. */
+  directory?: string;
+  requiresDirectory?: boolean;
   automatic?: boolean;
   development: boolean;
   state: "disconnected" | "connecting" | "connected" | "waiting" | "denied" | "failed" | "selectHost" | "disconnectFirst" | "pendingDisconnect";

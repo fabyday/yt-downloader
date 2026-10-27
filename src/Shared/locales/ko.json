@@ -424,5 +424,8 @@
   "shortcut.action.pivotEnd": "끝 셀렉터 기준 확대",
   "shortcut.action.zoomIn": "타임라인 확대",
   "shortcut.action.zoomOut": "타임라인 축소",
-  "shortcut.action.zoomReset": "타임라인 확대 초기화"
+  "shortcut.action.zoomReset": "타임라인 확대 초기화",
+  "integration.dev.selectDirectory": "Kawaikara DEV 폴더 선택",
+  "integration.dev.chooseHelp": "package.json이 있는 Kawaikara 체크아웃을 선택하세요. 선택한 폴더의 실행 중인 DEV에만 연결합니다.",
+  "integration.dev.useInstalled": "설치된 Kawaikara 사용"
 }

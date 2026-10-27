@@ -424,5 +424,8 @@
   "shortcut.action.pivotEnd": "Zoom around end selector",
   "shortcut.action.zoomIn": "Zoom in timeline",
   "shortcut.action.zoomOut": "Zoom out timeline",
-  "shortcut.action.zoomReset": "Reset timeline zoom"
+  "shortcut.action.zoomReset": "Reset timeline zoom",
+  "integration.dev.selectDirectory": "Select Kawaikara DEV checkout",
+  "integration.dev.chooseHelp": "Select the Kawaikara checkout containing package.json. Only that checkout’s running DEV host will be used.",
+  "integration.dev.useInstalled": "Use installed Kawaikara"
 }

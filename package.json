@@ -23,6 +23,7 @@
     "bundle:worker:prod": "webpack --config src/Worker/webpack.prod.ts",
     "bundle:worker:dev": "webpack --config src/Worker/webpack.dev.ts",
     "test:worker": "pnpm run bundle:worker:dev && node tests/worker-integration.cjs",
+    "test:connection": "node --require ts-node/register/transpile-only --test tests/kawaikara-connection.test.cjs tests/start-connected.test.cjs",
     "test:protocol": "node --require ts-node/register/transpile-only --test tests/external-protocol.test.cjs",
     "test:updater": "node --require ts-node/register/transpile-only --test tests/yt-dlp-updater.test.cjs",
     "test:cookies": "node --require ts-node/register/transpile-only --test tests/cookies.test.cjs",

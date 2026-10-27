@@ -29,15 +29,19 @@ export function PreferenceGeneralSettings({
   preferences,
 }: PreferenceGeneralSettingsProps) {
   const { t } = useI18n();
+  const [development, setDevelopment] = useState(false);
   const [connection, setConnection] = useState<DevelopmentConnectionStatus>();
   useEffect(() => {
     let active = true;
+    void window.ytClipper.getAppInfo().then((info) => {
+      if (active) setDevelopment(info.isPackaged === false);
+    }).catch(() => {});
     const refresh = () => {
       void window.ytClipper
         .developmentConnection("status")
         .then((state) => {
           if (active)
-            setConnection((previous) => ({ ...state, hosts: previous?.hosts }));
+            setConnection((previous) => ({ ...state, hosts: previous?.directory === state.directory ? previous?.hosts : undefined }));
         })
         .catch(() => {});
     };
@@ -49,7 +53,7 @@ export function PreferenceGeneralSettings({
     };
   }, []);
   const changeConnection = async (
-    operation: "connect" | "disconnect" | "automatic",
+    operation: "connect" | "disconnect" | "automatic" | "selectDirectory" | "installed",
     hostId?: string,
   ) => {
     if (openingKawaikara) return;
@@ -59,7 +63,7 @@ export function PreferenceGeneralSettings({
         await window.ytClipper.developmentConnection(operation, hostId),
       );
     } catch {
-      setConnection({ development: true, state: "failed" });
+      setConnection(previous => ({ ...previous, development: previous?.development ?? true, state: "failed" }));
     } finally {
       setOpeningKawaikara(false);
     }
@@ -245,15 +249,23 @@ export function PreferenceGeneralSettings({
           <Text size="sm" tone="muted">
             {t("integration.description")}
           </Text>
-          {connection?.development ? (
+          {development && (
+            <>
+              <Button variant="secondary" disabled={openingKawaikara} onClick={() => void changeConnection("selectDirectory")}>
+                {t("integration.dev.selectDirectory")}
+              </Button>
+              {connection?.directory && <Text size="xs" tone="muted">{connection.directory}</Text>}
+            </>
+          )}
+          {development && connection?.development ? (
             <Stack gap="sm">
               <Text size="sm" tone="muted">
-                {t("integration.dev.help")}
+                {t(connection.requiresDirectory ? "integration.dev.chooseHelp" : "integration.dev.help")}
               </Text>
               <Switch
                 label={t("integration.dev.automatic")}
                 checked={connection.automatic !== false}
-                disabled={openingKawaikara || connection.state === "connecting"}
+                disabled={openingKawaikara || connection.requiresDirectory || connection.state === "connecting"}
                 onCheckedChange={(enabled) =>
                   void changeConnection("automatic", String(enabled))
                 }
@@ -289,6 +301,9 @@ export function PreferenceGeneralSettings({
                     Kawaikara Dev · {hostId.slice(0, 8)}
                   </Button>
                 ))}
+              <Button variant="ghost" disabled={openingKawaikara} onClick={() => void changeConnection("installed")}>
+                {t("integration.dev.useInstalled")}
+              </Button>
               <Text size="sm" role="status">
                 {t(`integration.dev.${connection.state}`)}
               </Text>

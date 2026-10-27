@@ -424,5 +424,8 @@
   "shortcut.action.pivotEnd": "終了セレクターを基準にズーム",
   "shortcut.action.zoomIn": "タイムラインを拡大",
   "shortcut.action.zoomOut": "タイムラインを縮小",
-  "shortcut.action.zoomReset": "タイムラインのズームをリセット"
+  "shortcut.action.zoomReset": "タイムラインのズームをリセット",
+  "integration.dev.selectDirectory": "Kawaikara DEVフォルダーを選択",
+  "integration.dev.chooseHelp": "package.jsonを含むKawaikaraチェックアウトを選択してください。選択したフォルダーで起動中のDEVにのみ接続します。",
+  "integration.dev.useInstalled": "インストール済みKawaikaraを使用"
 }

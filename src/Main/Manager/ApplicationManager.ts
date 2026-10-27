@@ -1,7 +1,8 @@
+import { KawaikaraConnection } from "../KawaikaraConnection";
 import path from "node:path";
 import { DevelopmentConnection } from "../DevelopmentConnection";
 import { readDevelopmentAppIcon } from "../DevelopmentAppIcon";
-import { app, dialog } from "electron";
+import { app, dialog, shell } from "electron";
 import {
   failureReturnCode,
   getReturnCodeMessage,
@@ -21,7 +22,7 @@ import { CompanionManager } from "./CompanionManager";
 import { UpdateManager } from "./UpdateManager";
 
 export class ApplicationManager extends BaseManager<ApplicationReturnType> {
-  private developmentConnection?: DevelopmentConnection;
+  private developmentConnection?: KawaikaraConnection;
   private allowQuit = false;
   private initialized = false;
   private ipcManager: IPCManager | null = null;
@@ -104,19 +105,14 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
         rendererResult.data.url,
         this.companionManager,
       );
-      const connectionDirectory = !app.isPackaged
-        ? process.env.KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY
-        : undefined;
-      if (connectionDirectory && !path.isAbsolute(connectionDirectory))
-        throw new Error("Kawaikara development connection directory must be absolute.");
-      if (connectionDirectory) {
-        this.developmentConnection = new DevelopmentConnection(
-          path.join(app.getPath("userData"), "kawaikara-development-connection.json"),
-          (url) => this.openExternalUrl(url),
-          connectionDirectory,
+      this.developmentConnection = new KawaikaraConnection(
+        app.getPath("userData"), app.isPackaged,
+        (file, directory) => new DevelopmentConnection(
+          file, (url) => this.openExternalUrl(url), directory,
           () => readDevelopmentAppIcon(path.join(app.getAppPath(), "resources", "app-icon.png")),
-        );
-      }
+        ),
+        () => shell.openExternal("kawaikara://bridge/wake"),
+      );
       this.ipcManager = new IPCManager(
         this.workerManager,
         this.windowManager,
@@ -152,7 +148,7 @@ export class ApplicationManager extends BaseManager<ApplicationReturnType> {
       }
 
       this.initialized = true;
-      await this.developmentConnection?.start();
+      await this.developmentConnection?.start(process.env.KAWAIKARA_EXTERNAL_APP_CONNECTION_DIRECTORY);
       return successReturnCode(
         ApplicationReturnType.Initialized,
         "Application initialized",
